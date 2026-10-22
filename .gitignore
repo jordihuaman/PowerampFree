@@ -1,0 +1,12 @@
+.gradle/
+build/
+app/build/
+extract/so/
+tools/gradle/
+tools/jdk/
+tools/*.zip
+tools/jadx-headless-mcp-*.jar
+targets/
+.idea/
+*.iml
+local.properties
