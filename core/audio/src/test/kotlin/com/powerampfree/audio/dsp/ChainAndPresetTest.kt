@@ -32,7 +32,11 @@ class ChainAndPresetTest {
 
     @Test
     fun chain_trims_no_output_clipping() {
-        val preset = EqPreset("Hot", preampDb = 12f, bands = (1..10).map { Band(FilterType.PEAKING, 100 * it, 12f, 0.7f) })
+        val preset = EqPreset(
+            "Hot", preampDb = 12f,
+            bands = (1..10).map { Band(FilterType.PEAKING, 100 * it, 12f, 0.7f) },
+            limitOn = true,
+        )
         val chain = DspChain.buildDefault(44100, 2, preset)
         // Loud woman-wave input near full scale.
         val frames = 4410
@@ -43,6 +47,60 @@ class ChainAndPresetTest {
             assertTrue(v <= 1.0f, "value above 1.0: $v") // limiter ceiling respects [-1,1]
             assertTrue(v >= -1.0f, "value below -1.0: $v")
         }
+    }
+
+    @Test
+    fun limiter_disabled_is_passthrough() {
+        val preset = EqPreset(
+            "Hot", preampDb = 12f,
+            bands = (1..10).map { Band(FilterType.PEAKING, 100 * it, 12f, 0.7f) },
+            limitOn = false,
+        )
+        val chain = DspChain.buildDefault(44100, 2, preset)
+        val buf = FloatArray(4410 * 2) { 0.9f }
+        chain.process(buf, 4410, 2)
+        // Without the limiter module the hot preset MUST be able to exceed the ceiling.
+        assertTrue(buf.any { it > 1.0f }, "disabled limiter clipped anyway")
+    }
+
+    @Test
+    fun resolved_bands_layers_compose() {
+        val preset = EqPreset(
+            name = "Layers",
+            bands = listOf(Band(FilterType.PEAKING, 1000, 2f, 1f)),
+            graphicGainsDb = List(EqPreset.GRAPHIC_FREQS_HZ.size) { 3f },
+            graphicOn = true,
+            toneBassPct = 25f,
+            toneTreblePct = 50f,
+            toneOn = true,
+        )
+        val r = preset.resolvedBands()
+        assertEquals(13, r.size)
+        // Graphic layer: fixed freqs, 3 dB each.
+        r[1].let { assertEquals(31, it.freqHz); assertEquals(3f, it.gainDb); assertEquals(1.41f, it.q) }
+        r[10].let { assertEquals(16000, it.freqHz) }
+        // Tone shelves last, mapped % → dB.
+        r[11].let { assertEquals(FilterType.LOW_SHELF, it.type); assertEquals(250, it.freqHz); assertEquals(3.0f, it.gainDb) }
+        r[12].let { assertEquals(FilterType.HIGH_SHELF, it.type); assertEquals(4000, it.freqHz); assertEquals(6.0f, it.gainDb) }
+        // Layers off → only manual bands.
+        val off = preset.copy(graphicOn = false, toneOn = false)
+        assertEquals(listOf(Band(FilterType.PEAKING, 1000, 2f, 1f)), off.resolvedBands())
+        assertEquals(0, off.graphicBandCount)
+    }
+
+    @Test
+    fun resolved_bands_chain_accepts_full_layering() {
+        val preset = EqPreset(
+            name = "Full",
+            bands = (1..12).map { Band(FilterType.PEAKING, 100 * it, 0.5f, 1f) },
+            graphicOn = true,
+            toneOn = true,
+            limitOn = true,
+        )
+        val chain = DspChain.buildDefault(44100, 2, preset)
+        val buf = FloatArray(2205 * 2) { 0.5f }
+        chain.process(buf, 2205, 2)
+        buf.forEach { assertTrue(it.isFinite()) }
     }
 
     @Test

@@ -15,10 +15,14 @@ import kotlin.math.exp
  */
 class SoftLimiter(override val sampleRateHz: Int, val ceiling: Float = 0.98f) : AudioProcessor {
 
+    /** Module toggle (Limit button on the EQ screen); disabled = pure passthrough. */
+    var enabled: Boolean = true
+
     private val releaseCoeff = exp(-1.0 / (0.080 * sampleRateHz))
     private var env = 0f
 
     override fun process(buffer: FloatArray, frames: Int, channels: Int) {
+        if (!enabled) return
         var peak = 0f
         for (i in 0 until frames * channels) {
             val a = abs(buffer[i])

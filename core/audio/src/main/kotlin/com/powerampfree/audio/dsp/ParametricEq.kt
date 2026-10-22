@@ -29,8 +29,10 @@ class ParametricEq private constructor(
      */
     class Config private constructor(val bands: List<Band>) {
         companion object {
+            // Manual (≤31) + graphic (10) + tone (2) layers resolve on one engine,
+            // so the hard cap is 63, matching the store chain layout.
             fun of(bands: List<Band>): Config {
-                require(bands.size in 0..31) { "bands size must be 0..31, got ${bands.size}" }
+                require(bands.size in 0..63) { "bands size must be 0..63, got ${bands.size}" }
                 return Config(bands)
             }
         }
@@ -67,7 +69,7 @@ class ParametricEq private constructor(
 
     /** Observed-equivalent: replace all bands (full reconfigure path). */
     fun setBands(newBands: List<Band>) {
-        require(newBands.size in 0..31)
+        require(newBands.size in 0..63)
         bandState.clear()
         for (b in newBands) {
             bandState += BandState(b, Array(channels) { Biquad.design(b, sampleRateHz.toDouble()) })

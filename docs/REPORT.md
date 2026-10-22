@@ -134,7 +134,14 @@ app/src/main/kotlin/com/powerampfree/player/
 
 ## 6. Resultados de verificación
 
-Gradle `:core:audio:test` (JVM): **40 tests / 0 fallos** (25 DSP/del diseño + 9 crossfade + 6 espectro).
+Gradle `:core:audio:test` (JVM): **49 tests / 0 fallos** (25 DSP + 9 crossfade + 6 espectro + 6 shuffle + 3 capas EQ/limitador).
+UI de app: navegación de 5 tabs + mini-player + cola + búsqueda + categorías
+MediaStore (`QueueBus` mismo proceso; `SEEK_QUEUE` propio) + explorador de
+carpetas con breadcrumb/totales/selección/sort + EQ gráfico (tabs EQ/Tone/Limit,
+10 bandas + preamp, knobs Tone, limitador, chip) + **Ajustes** (raíz con
+overlay, tema Auto/Claro/Oscuro + acento + negrita + start-at-library,
+rescan, Export/Import de datos con bug de tipos corregido).
+`:app:assembleDebug` verde.
 Criterios destacados:
 
 - **exactitud**: peaking a fc logra *exactamente* ±gainDb (tolerancia 1e-6) para Q∈{0.7,1,2.5,10}×gain∈{-8..8}: coherente con la naturaleza paramétrica del motor de referencia.
@@ -145,6 +152,35 @@ Criterios destacados:
 - **auto-advance igualdad de IDs y eventos: guard de sesiones, promoción pendiente, tolerancia a callback duplicados** — refleja lo decompilado del motor de referencia.
 
 ## 7. Plan de implementación (siguientes pasos)
+
+6. **Sprint 1 — Player screen (2026-10-22)** ✅: repeat off/one/all (los dos motores),
+   shuffle (elegida primero + resto barajado en dual), ±10 s, chip de formato técnico
+   real del decoder (`FormatBus`), rating like/dislike persistente, sleep timer con
+   cuenta atrás, marquee. Verificación en dispositivo en `VERIFICATION.md` §Sprint 1
+   (46/46 tests, APK instalado). Detalle de roadmap en `POWERAMP_FEATURES.md`.
+7. **Sprint 2 — Navegación (2026-10-22)** ✅: bottom nav 5 tabs, mini-player
+   persistente (tap → player), Cola completa con tap-para-saltar (`SEEK_QUEUE`
+   + `QueueBus` mismo proceso), Búsqueda con filtros y historial persistente,
+   Biblioteca por categorías (All Songs/Álbumes/Artistas/Géneros/Carpetas +
+   SAF; `MediaTrack` extendido y `MediaGenres`). Verificado en dispositivo
+   (`VERIFICATION.md` §Sprint 2; 46/46 tests, APK instalado).
+8. **Sprint 3 — Carpetas (2026-10-22)** ✅: explorador con breadcrumb y totales
+   del subárbol, ▶ Todo / 🎲 aleatorio / ☑ Select / ⇅ sort (List Options),
+   duraciones por fila, selección multiple reproducible y fixes de insets de
+   status bar en MIUI. Verificado en dispositivo (`VERIFICATION.md`
+   §Sprint 3; 46/46 tests, APK instalado).
+9. **Sprint 4 — EQ gráfico (2026-10-22)** ✅: tabs EQ/Tone/Limit, 10 bandas
+   gráficas (31–16 kHz) con faders verticales + Preamp, curva por capas,
+   knobs Bass/Treble como 2 bandas shelf reales del motor, limitador
+   conmutable y chip `NO DVC · EQ n · TON · LMT`. Verificado en dispositivo
+   (`VERIFICATION.md` §Sprint 4; 49/49 tests, APK instalado, reset a defaults).
+10. **Sprint 5 — Settings + tema (2026-10-22)** ✅: raíz de ajustes overlay con
+    10 categorías, Look & Feel en vivo (tema Auto/Claro/Oscuro, acento de
+    color, negrita, Start at Library), rescan de biblioteca y Export/Import
+    de datos a JSON (Documents/PowerampFree; bug org.json Long→Int fixed).
+    Verificado en dispositivo (`VERIFICATION.md` §Sprint 5; 49/49 tests).
+11. **Próximo — Sprint 6 (bloques 4 + 5)**: menú contextual de pista y letras
+    sincronizadas.
 
 6. **Paso 6 — verificación en dispositivo real (2026-10-21)** ✅ ejecutada (detalle en
    `VERIFICATION.md` §Paso 6): teléfono físico Xiaomi MIUI Android 16 arm64-v8a. Se

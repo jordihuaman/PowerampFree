@@ -21,6 +21,9 @@ data class MediaTrack(
     val artist: String,
     val album: String,
     val durationMs: Long,
+    val albumId: Long = -1L,
+    val trackNo: Int = 0,
+    val folder: String = "",
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("uri", uri)
@@ -28,6 +31,9 @@ data class MediaTrack(
         put("artist", artist)
         put("album", album)
         put("dur", durationMs)
+        if (albumId >= 0) put("albId", albumId)
+        if (trackNo > 0) put("trk", trackNo)
+        if (folder.isNotEmpty()) put("dir", folder)
     }
 
     companion object {
@@ -48,6 +54,9 @@ data class MediaTrack(
                     artist = o.optString("artist"),
                     album = o.optString("album"),
                     durationMs = o.optLong("dur"),
+                    albumId = o.optLong("albId", -1L),
+                    trackNo = o.optInt("trk", 0),
+                    folder = o.optString("dir"),
                 )
             }
         }
@@ -82,7 +91,7 @@ object MediaStoreLibrary {
      */
     fun query(context: Context): List<MediaTrack> {
         val out = ArrayList<MediaTrack>(128)
-        val projection = arrayOf(
+        val projection = mutableListOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
@@ -91,12 +100,16 @@ object MediaStoreLibrary {
             MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.TRACK,
         )
+        // Folder grouping (RELATIVE_PATH is API 29+).
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            projection += MediaStore.Audio.Media.RELATIVE_PATH
+        }
         val sortOrder = "${MediaStore.Audio.Media.ALBUM_ID} ASC, " +
             "${MediaStore.Audio.Media.TRACK} ASC, ${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
         try {
             context.contentResolver.query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                projection,
+                projection.toTypedArray(),
                 null,
                 null,
                 sortOrder,
@@ -106,6 +119,9 @@ object MediaStoreLibrary {
                 val artist = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
                 val album = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
                 val dur = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                val albumId = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+                val track = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
+                val path = c.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
                 while (c.moveToNext()) {
                     val uri = ContentUris.withAppendedId(
                         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, c.getLong(id),
@@ -116,11 +132,63 @@ object MediaStoreLibrary {
                         artist = c.getString(artist) ?: "",
                         album = c.getString(album) ?: "",
                         durationMs = c.getLong(dur),
+                        albumId = c.getLong(albumId),
+                        trackNo = c.getInt(track),
+                        folder = if (path >= 0) c.getString(path) ?: "" else "",
                     )
                 }
             }
         } catch (_: SecurityException) {
             // permission denied → empty library; UI shows the grant button
+        } catch (_: IllegalArgumentException) {
+            // malformed row → skip
+        }
+        return out
+    }
+}
+
+/** One genre with the member track URIs (for the GENRES category screen). */
+data class GenreEntry(val name: String, val uris: List<String>)
+
+/** MediaStore.Audio.Genres browse: genre name → member track URIs. */
+object MediaGenres {
+    fun load(context: Context): List<GenreEntry> {
+        val out = ArrayList<GenreEntry>()
+        try {
+            context.contentResolver.query(
+                MediaStore.Audio.Genres.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Audio.Genres._ID, MediaStore.Audio.Genres.NAME),
+                null,
+                null,
+                "${MediaStore.Audio.Genres.NAME} COLLATE NOCASE ASC",
+            )?.use { g ->
+                val idC = g.getColumnIndexOrThrow(MediaStore.Audio.Genres._ID)
+                val nameC = g.getColumnIndexOrThrow(MediaStore.Audio.Genres.NAME)
+                while (g.moveToNext()) {
+                    val gid = g.getLong(idC)
+                    val name = g.getString(nameC) ?: continue
+                    val uris = ArrayList<String>()
+                    val members = MediaStore.Audio.Genres.Members.getContentUri("external", gid)
+                    context.contentResolver.query(
+                        members,
+                        arrayOf(MediaStore.Audio.Genres.Members.AUDIO_ID),
+                        null,
+                        null,
+                        null,
+                    )?.use { m ->
+                        val aC = m.getColumnIndexOrThrow(MediaStore.Audio.Genres.Members.AUDIO_ID)
+                        while (m.moveToNext()) {
+                            uris += ContentUris.withAppendedId(
+                                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                                m.getLong(aC),
+                            ).toString()
+                        }
+                    }
+                    if (uris.isNotEmpty()) out += GenreEntry(name, uris)
+                }
+            }
+        } catch (_: SecurityException) {
+            // permission denied → no genres
         } catch (_: IllegalArgumentException) {
             // malformed row → skip
         }
@@ -149,6 +217,7 @@ object SafLibrary {
                             artist = dir.name ?: "",
                             album = "SAF",
                             durationMs = 0L,
+                            folder = dir.name ?: "",
                         )
                     }
                 }

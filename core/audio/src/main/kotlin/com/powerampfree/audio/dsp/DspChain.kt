@@ -25,8 +25,8 @@ class DspChain(override val sampleRateHz: Int, val channels: Int, val processors
             crossfade: CrossfadeProcessor? = null,
         ): DspChain {
             val gain = GainStage(sampleRateHz, contentGainDb = preset.preampDb, volumeLinear = volume)
-            val eq = ParametricEq.build(ParametricEq.Config.of(preset.bands), sampleRateHz, channels)
-            val limiter = SoftLimiter(sampleRateHz)
+            val eq = ParametricEq.build(ParametricEq.Config.of(preset.resolvedBands()), sampleRateHz, channels)
+            val limiter = SoftLimiter(sampleRateHz).apply { enabled = preset.limitOn }
             return DspChain(
                 sampleRateHz, channels,
                 listOfNotNull(crossfade, gain, eq, limiter),

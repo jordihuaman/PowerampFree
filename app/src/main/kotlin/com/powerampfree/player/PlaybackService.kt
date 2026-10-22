@@ -20,6 +20,7 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.ListenableFuture
 import com.powerampfree.audio.engine.AutoAdvanceEngine
+import com.powerampfree.audio.util.ShuffleOps
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
@@ -62,6 +63,34 @@ class PlaybackService : MediaSessionService() {
         get() = PlaybackSettings.crossfadeMs(applicationContext)
     private val dualMode: Boolean
         get() = crossfadeMs > 0
+
+    // ---- repeat / shuffle (player screen) ----------------------------------
+    private val repeatMode: String
+        get() = PlaybackSettings.repeatMode(applicationContext)
+    private val isRepeatOne: Boolean
+        get() = repeatMode == PlaybackSettings.REPEAT_ONE
+    private val isRepeatAll: Boolean
+        get() = repeatMode == PlaybackSettings.REPEAT_ALL
+    private val shuffleOn: Boolean
+        get() = PlaybackSettings.shuffleEnabled(applicationContext)
+
+    private fun applyNativePlayerFlags(p: androidx.media3.common.Player?) {
+        p ?: return
+        p.repeatMode = when (repeatMode) {
+            PlaybackSettings.REPEAT_ONE -> Player.REPEAT_MODE_ONE
+            PlaybackSettings.REPEAT_ALL -> Player.REPEAT_MODE_ALL
+            else -> Player.REPEAT_MODE_OFF
+        }
+        p.shuffleModeEnabled = shuffleOn
+    }
+
+    /** Dual beams carry a single item: replay-one loops natively, ALL wraps in
+     *  the orchestrator ([advanceOrchestrator]), so the beam must not loop. */
+    private fun applyDualBeamFlags(p: androidx.media3.common.Player?) {
+        p ?: return
+        p.repeatMode = if (isRepeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        p.shuffleModeEnabled = false
+    }
 
     /** One decodable audio slot: its own player + DSP processor + listener. */
     private class ExoBeam(val player: ExoPlayer?, val dsp: DspAudioProcessor?) {
@@ -118,6 +147,7 @@ class PlaybackService : MediaSessionService() {
             )
             .build()
         player.addListener(makeListener(player))
+        applyNativePlayerFlags(player)
         return ExoBeam(player, dsp)
     }
 
@@ -192,6 +222,28 @@ class PlaybackService : MediaSessionService() {
             if (self !== primary.player) return
             planPrimaryCrossfade()
         }
+
+        /** Publishes the REAL decoder format (sampleRate/bitrate/codec) so the
+         *  UI can show the technical chip without metadata guessing. */
+        override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+            if (self !== primary.player) return
+            var sRate = 0
+            var bps = 0
+            var mime = ""
+            outer@ for (group in tracks.groups) {
+                if (group.type != C.TRACK_TYPE_AUDIO) continue
+                for (i in 0 until group.length) {
+                    val f = group.getTrackFormat(i)
+                    if (f.sampleRate > 0) {
+                        sRate = f.sampleRate
+                        bps = if (f.bitrate > 0) f.bitrate else 0
+                        mime = f.sampleMimeType ?: ""
+                        break@outer
+                    }
+                }
+            }
+            FormatBus.current = FormatBus.formatString(sRate, bps, mime)
+        }
     }
 
     // --------------------------------------------------------- orchestrator
@@ -217,6 +269,7 @@ class PlaybackService : MediaSessionService() {
         beam.player?.play()
         // Give the session the live beam: the audible engine changes, so the
         // session player must follow (single decoder identity for the UI).
+        applyDualBeamFlags(beam.player)
         mediaSession?.setPlayer(beam.player!!)
         plannedRealDurationMs = -1L
         primary.release()
@@ -271,6 +324,7 @@ class PlaybackService : MediaSessionService() {
         queueIndex += 1
         plannedRealDurationMs = -1L
         advanceEngine.currentTrackOpened(sidOf(queueIndex))
+        QueueBus.publish(queueTracks, queueIndex)
         val old = primary
         primary = ov
         overlay = null
@@ -287,16 +341,21 @@ class PlaybackService : MediaSessionService() {
     /** Instant advance (skip / next-media-button / end-without-overlay). */
     private fun advanceOrchestrator() {
         if (!dualMode) return
-        if (queueIndex + 1 !in queueTracks.indices) {
+        var next = queueIndex + 1
+        if ((next !in queueTracks.indices) && isRepeatAll && queueTracks.isNotEmpty()) {
+            next = 0 // repeat all: continuous replay of the whole queue
+        }
+        if (next !in queueTracks.indices) {
             advanceEngine.playbackTerminated()
             cancelPendingFadeFinish()
             return
         }
         cancelPendingFadeFinish()
         fadeActive = false
-        val index = queueIndex + 1
+        val index = next
         queueIndex = index
         plannedRealDurationMs = -1L
+        QueueBus.publish(queueTracks, index)
         val beam = buildBeam(withFocus = false).also {
             it.player?.setMediaItem(queueTracks[index].toMediaItem())
             it.dsp?.setCrossfadePlan(
@@ -308,6 +367,7 @@ class PlaybackService : MediaSessionService() {
             )
             it.player?.prepare()
         }
+        applyDualBeamFlags(beam.player)
         advanceEngine.currentTrackOpened(sidOf(index))
         mediaSession?.setPlayer(beam.player!!)
         primary.release()
@@ -321,6 +381,8 @@ class PlaybackService : MediaSessionService() {
     private fun planPrimaryCrossfade() {
         val dsp = primary.dsp ?: return
         if (!dualMode) { resetCrossfadePlan(dsp); return }
+        // Repeat-one loops the single item natively: no seam, no fades.
+        if (isRepeatOne) { resetCrossfadePlan(dsp); return }
         if (queueIndex !in queueTracks.indices) return
         // Primary owns exactly one item; its plan uses the remaining queue's
         // durations so the fade-OUT is aligned to the item's own end (seam).
@@ -370,7 +432,7 @@ class PlaybackService : MediaSessionService() {
             if (!fadeActive && p != null && dualMode) {
                 replanWithRealDuration(p)
             }
-            if (!fadeActive && p != null && p.isPlaying && dualMode &&
+            if (!fadeActive && p != null && p.isPlaying && dualMode && !isRepeatOne &&
                 queueIndex in queueTracks.indices && queueIndex + 1 < queueTracks.size
             ) {
                 val dur = p.duration
@@ -396,7 +458,20 @@ class PlaybackService : MediaSessionService() {
             return
         }
         queueIndex -= 1
+        if (dualMode && queueIndex in queueTracks.indices) {
+            QueueBus.publish(queueTracks, queueIndex)
+        }
         dualModeOrchestratorPlayPrevious()
+    }
+
+    /** Queue screen: jump directly to [idx] WITHOUT re-shuffling/re-queueing. */
+    private fun queueJump(idx: Int) {
+        cancelPendingFadeFinish()
+        fadeActive = false
+        queueIndex = idx
+        plannedRealDurationMs = -1L
+        playCurrentItem(0L)
+        QueueBus.publish(queueTracks, idx)
     }
 
     private fun dualModeOrchestratorPlayPrevious() {
@@ -459,6 +534,10 @@ class PlaybackService : MediaSessionService() {
                 .add(SessionCommand(CMD_SKIP_NEXT, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SKIP_PREV, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SET_QUEUE, Bundle.EMPTY))
+                .add(SessionCommand(CMD_SEEK_QUEUE, Bundle.EMPTY))
+                .add(SessionCommand(CMD_ENQUEUE_NEXT, Bundle.EMPTY))
+                .add(SessionCommand(CMD_SET_REPEAT, Bundle.EMPTY))
+                .add(SessionCommand(CMD_SET_SHUFFLE, Bundle.EMPTY))
                 .build()
             // Custom layout: real skip buttons live in the notification/UI even
             // in dual mode, where the single-item session player cannot serve
@@ -485,6 +564,13 @@ class PlaybackService : MediaSessionService() {
                         PresetStore.storeCurrent(applicationContext, p)
                         primary.dsp?.applyPreset(p)
                         overlay?.dsp?.applyPreset(p)
+                        android.util.Log.i(
+                            TAG,
+                            "applyPreset bands=${p.bands.size} graphic=${p.graphicOn} " +
+                                "gains=${p.graphicGainsDb.joinToString(prefix="(", postfix=")") { "%.1f".format(it) }} " +
+                                "tone=${p.toneOn} b=${p.toneBassPct.toInt()}% t=${p.toneTreblePct.toInt()}% " +
+                                "limit=${p.limitOn} resolved=${p.resolvedBands().size}",
+                        )
                     }
                     completed(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
@@ -496,6 +582,51 @@ class PlaybackService : MediaSessionService() {
             }
             CMD_SKIP_NEXT -> { skipNext(); completed(SessionResult(SessionResult.RESULT_SUCCESS)) }
             CMD_SKIP_PREV -> { skipPrevious(); completed(SessionResult(SessionResult.RESULT_SUCCESS)) }
+            CMD_SET_REPEAT -> {
+                val mode = args.getString(EXTRA_REPEAT_MODE) ?: ""
+                if (mode !in listOf(
+                        PlaybackSettings.REPEAT_OFF,
+                        PlaybackSettings.REPEAT_ONE,
+                        PlaybackSettings.REPEAT_ALL,
+                    )
+                ) {
+                    completed(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                } else {
+                    android.util.Log.i(TAG, "setRepeat mode=$mode dual=$dualMode")
+                    PlaybackSettings.setRepeatMode(applicationContext, mode)
+                    if (dualMode) {
+                        applyDualBeamFlags(primary.player)
+                        // one: loop natively, so re-clear the seam plan; all/one
+                        // switch changes whether the overlay must be armed.
+                        planPrimaryCrossfade()
+                    } else {
+                        applyNativePlayerFlags(primary.player)
+                    }
+                    completed(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+            }
+            CMD_SET_SHUFFLE -> {
+                val on = args.getBoolean(EXTRA_SHUFFLE_ON, false)
+                android.util.Log.i(TAG, "setShuffle on=$on dual=$dualMode")
+                PlaybackSettings.setShuffleEnabled(applicationContext, on)
+                if (dualMode) {
+                    if (on && queueIndex in queueTracks.indices) {
+                        // Current track first, everything after it randomized.
+                        val current = queueTracks[queueIndex]
+                        val rest = queueTracks.filterIndexed { i, _ -> i != queueIndex }
+                        queueTracks = listOf(current) + ShuffleOps.shuffleTail(
+                            rest, -1, kotlin.random.Random(System.nanoTime()),
+                        )
+                        queueIndex = 0
+                        QueueBus.publish(queueTracks, 0)
+                        saveQueueSnapshot()
+                        armOverlay()
+                    }
+                } else {
+                    primary.player?.shuffleModeEnabled = on
+                }
+                completed(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
             CMD_SET_QUEUE -> {
                 val tracks = args.getString(EXTRA_TRACKS_JSON)?.let { json ->
                     runCatching { MediaTrack.listFromJson(json) }.getOrNull()
@@ -507,6 +638,32 @@ class PlaybackService : MediaSessionService() {
                     completed(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
             }
+            CMD_SEEK_QUEUE -> {
+                val idx = args.getInt(EXTRA_START_INDEX, -1)
+                android.util.Log.i(TAG, "seekQueue idx=$idx dual=$dualMode")
+                when {
+                    !dualMode && idx >= 0 -> {
+                        primary.player?.seekTo(idx, 0L)
+                        completed(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                    dualMode && idx in queueTracks.indices -> {
+                        queueJump(idx)
+                        completed(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                    else -> completed(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                }
+            }
+            CMD_ENQUEUE_NEXT -> {
+                val tracks = args.getString(EXTRA_TRACKS_JSON)?.let { json ->
+                    runCatching { MediaTrack.listFromJson(json) }.getOrNull()
+                }
+                if (tracks.isNullOrEmpty()) {
+                    completed(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                } else {
+                    enqueueTracks(tracks, args.getBoolean(EXTRA_ENQUEUE_END, false))
+                    completed(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+            }
             else -> completed(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
         }
 
@@ -514,15 +671,65 @@ class PlaybackService : MediaSessionService() {
         private fun setQueue(tracks: List<MediaTrack>, startIndex: Int) {
             android.util.Log.i(TAG, "setQueue n=${tracks.size} index=$startIndex dual=$dualMode")
             if (tracks.isEmpty()) return
+            val start = startIndex.coerceIn(0, tracks.size - 1)
             if (dualMode) {
-                queueTracks = tracks
-                queueIndex = startIndex.coerceIn(0, tracks.size - 1)
+                // With shuffle on, the chosen track leads and the rest of the
+                // queue is randomized (behavioral family with the reference).
+                val ordered = if (shuffleOn && tracks.size > 1) {
+                    val rest = tracks.filterIndexed { i, _ -> i != start }
+                    listOf(tracks[start]) + ShuffleOps.shuffleTail(
+                        rest, -1, kotlin.random.Random(System.nanoTime()),
+                    )
+                } else tracks
+                queueTracks = ordered
+                queueIndex = 0
+                QueueBus.publish(ordered, 0)
                 playCurrentItem(0L)
             } else {
                 val p = primary.player ?: return
-                p.setMediaItems(tracks.map { it.toMediaItem() }, startIndex.coerceIn(0, tracks.size - 1), 0L)
+                applyNativePlayerFlags(p)
+                p.setMediaItems(tracks.map { it.toMediaItem() }, start, 0L)
                 p.prepare()
                 p.play()
+                QueueBus.publish(tracks, start)
+            }
+        }
+
+        // Insert tracks after the current item (or at the end) without
+        // interrupting ongoing playback (context-menu "enqueue next").
+        private fun enqueueTracks(tracks: List<MediaTrack>, atEnd: Boolean) {
+            if (dualMode) {
+                if (queueTracks.isEmpty()) {
+                    setQueue(tracks, 0)
+                    return
+                }
+                val at = if (atEnd) queueTracks.size else queueIndex + 1
+                val newList = queueTracks.take(at) + tracks + queueTracks.drop(at)
+                queueTracks = newList
+                QueueBus.publish(newList, queueIndex)
+                android.util.Log.i(
+                    TAG, "enqueue n=${tracks.size} at=$at dual=true total=${newList.size}",
+                )
+            } else {
+                val p = primary.player ?: return
+                val base = QueueBus.tracks
+                val at = when {
+                    base.isEmpty() || QueueBus.index < 0 -> p.mediaItemCount
+                    atEnd -> p.mediaItemCount
+                    else -> (QueueBus.index + 1).coerceIn(0, p.mediaItemCount)
+                }
+                android.util.Log.i(TAG, "enqueue n=${tracks.size} at=$at dual=false")
+                p.addMediaItems(at, tracks.map { it.toMediaItem() })
+                // Publish the new structure for the queue screen.
+                if (base.isEmpty()) {
+                    QueueBus.publish(tracks, 0)
+                } else {
+                    val atList = at.coerceIn(0, base.size)
+                    QueueBus.publish(
+                        base.take(atList) + tracks + base.drop(atList),
+                        atList,
+                    )
+                }
             }
         }
 
@@ -555,6 +762,7 @@ class PlaybackService : MediaSessionService() {
                 )
             }
             queueIndex = startIndex.coerceIn(0, queueTracks.size - 1)
+            QueueBus.publish(queueTracks, queueIndex)
             playCurrentItem(startPositionMs)
             return completed(
                 MediaSession.MediaItemsWithStartPosition(
@@ -601,6 +809,8 @@ class PlaybackService : MediaSessionService() {
         if (dualMode) {
             queueTracks = saved.items
             queueIndex = saved.startIndex
+            QueueBus.publish(queueTracks, queueIndex)
+            applyDualBeamFlags(beam.player)
             beam.player?.setMediaItem(saved.items[saved.startIndex].toMediaItem(), saved.positionMs)
             beam.player?.prepare()
             planPrimaryCrossfade()
@@ -610,6 +820,7 @@ class PlaybackService : MediaSessionService() {
                 saved.items.map { it.toMediaItem() }, saved.startIndex, saved.positionMs,
             )
             beam.player?.prepare()
+            QueueBus.publish(saved.items, saved.startIndex)
         }
     }
 
@@ -671,11 +882,18 @@ class PlaybackService : MediaSessionService() {
         const val CMD_SKIP_NEXT = "com.powerampfree.player.SKIP_NEXT"
         const val CMD_SKIP_PREV = "com.powerampfree.player.SKIP_PREV"
         const val CMD_SET_QUEUE = "com.powerampfree.player.SET_QUEUE"
+        const val CMD_SEEK_QUEUE = "com.powerampfree.player.SEEK_QUEUE"
+        const val CMD_ENQUEUE_NEXT = "com.powerampfree.player.ENQUEUE_NEXT"
+        const val CMD_SET_REPEAT = "com.powerampfree.player.SET_REPEAT"
+        const val CMD_SET_SHUFFLE = "com.powerampfree.player.SET_SHUFFLE"
         const val EXTRA_PRESET_JSON = "com.powerampfree.player.preset_json"
         const val EXTRA_CROSSFADE_MS = "crossfade_ms"
         const val EXTRA_DURATION_MS = "durationMs"
         const val EXTRA_TRACKS_JSON = "tracks_json"
         const val EXTRA_START_INDEX = "start_index"
+        const val EXTRA_ENQUEUE_END = "enqueue_end"
+        const val EXTRA_REPEAT_MODE = "repeat_mode"
+        const val EXTRA_SHUFFLE_ON = "shuffle_on"
         private const val SAVE_PERIOD_MS = 15_000L
         private const val WATCHER_PERIOD_MS = 15L
 
