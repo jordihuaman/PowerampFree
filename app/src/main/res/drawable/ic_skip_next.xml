@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original simple double-triangle "next" icon for the crossfade layout -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF6D9EEB"
+        android:pathData="M3,6 L11,12 L3,18 Z" />
+    <path
+        android:fillColor="#FF6D9EEB"
+        android:pathData="M12,6 L20,12 L12,18 Z" />
+    <path
+        android:fillColor="#FF6D9EEB"
+        android:pathData="M21,6 h1.6 v12 h-1.6 Z" />
+</vector>

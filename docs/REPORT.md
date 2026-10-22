@@ -134,7 +134,7 @@ app/src/main/kotlin/com/powerampfree/player/
 
 ## 6. Resultados de verificación
 
-Gradle `:core:audio:test` (JVM): **25 tests / 0 fallos** (resumen por clases en sección 1).
+Gradle `:core:audio:test` (JVM): **40 tests / 0 fallos** (25 DSP/del diseño + 9 crossfade + 6 espectro).
 Criterios destacados:
 
 - **exactitud**: peaking a fc logra *exactamente* ±gainDb (tolerancia 1e-6) para Q∈{0.7,1,2.5,10}×gain∈{-8..8}: coherente con la naturaleza paramétrica del motor de referencia.
@@ -146,12 +146,31 @@ Criterios destacados:
 
 ## 7. Plan de implementación (siguientes pasos)
 
-1. `ANDROID_HOME` en el equipo → `settings.gradle.kts` incluye `:app` automáticamente.
-2. Completar `PlaybackService` TODOs: cola desde MediaStore/SAF, persistencia de cola.
-3. Implementar UI del EQ (Compose) ligada a `EqPreset`/`ParametricEq.responseCurve` y guardar presets JSON en `filesDir/eq/`.
-4. (Fase 2) Crossfade real mezclando dos decoders con `AutoAdvanceEngine*OVERLAP`.
-5. (Fase 3, opcional) Visualizador estilo spectrogram sobre tappeo del MediaSession.
+6. **Paso 6 — verificación en dispositivo real (2026-10-21)** ✅ ejecutada (detalle en
+   `VERIFICATION.md` §Paso 6): teléfono físico Xiaomi MIUI Android 16 arm64-v8a. Se
+   probaron con audio real del usuario (288 pistas MediaStore): instalación+permisos,
+   UI completa, playback nativo continuo (position avanzando, cola 288), skip prev/next
+   vía API broadcast en ambos motores, EQ aplicado en vivo por `set_preset`
+   (persistido), crossfade 2 s por UI → modo dual: `setQueue dual=true`, sesión
+   promovida con `MediaSession.setPlayer` a los beams del orquestador, promoción en la
+   costura con `advanceOrchestrator` y la costura natural al llegar al fin real de una
+   pista. Desarrollados durante las pruebas 6 defectos runtime (documentados con su
+   fix): puente PCM16↔float en `DspAudioProcessor`, `SET_QUEUE` propio (la
+   serialización de MediaItems de media3 trituro la cola en el binder), selección
+   pendiente de controller, promoción de sesión en dual omitida, registro dinámico del
+   ApiCommandReceiver (implicit broadcastes), y replan de fade con duración real del
+   decoder (~MediaStore dura más corta en OPUS). Sin crashes en toda la sesión.
+- Widget de pantalla, tema oscuro, listas guardadas — fase 7 (opcional).
 
+**Histórico de la planificación:**
+
+1. ~~`ANDROID_HOME` en el equipo → `settings.gradle.kts` incluye `:app` automáticamente.~~ ✅ hecho (paso 1).
+2. ~~Completar `PlaybackService` TODOs: cola desde MediaStore/SAF, persistencia de cola.~~ ✅ hecho (paso 2): `LibraryLoader` (MediaStore + SAF), `QueueStore`, servicio con restauración pausada y ticker de posición.
+3. ~~Implementar UI del EQ (Compose) ligada a `EqPreset`/`ParametricEq.responseCurve` y guardar presets JSON en `filesDir/eq/`.~~ ✅ hecho (paso 2): sección EQ en `MainActivity` con sliders por banda, preamp, curva vía `responseCurve`, presets con nombre y aplicado en vivo por comando de sesión `SET_PRESET`.
+3. ~~Implementar UI del EQ (Compose)~~ ✅ (paso 2). **3b. Crossfade (fase 3, 2026-10-21)** ✅ en su forma alcanzable dentro de un solo audio-sink Media3: `CrossfadeProcessor` (:core:audio, 8 tests) con fade-out secuencial sobre el final de la pista A + fade-in sobre el inicio de la B, sample-exacto vía plan de duraciones + snap en seeks; afectado por `AutoAdvanceEngine.OVERLAP` como estado lógico.
+   **3c. Mezcla real de dos decoders (fase 4, 2026-10-21)** ✅ clean-room: doble ExoPlayer con DSP propio por lado, fade-out→0 en la costura en el player saliente + fade-in por plan (`forceFadeIn`) en el overlay que arranca en seam−fadeMs, mezcla a nivel audio server, promoción por `MediaSession.setPlayer` (pending→current observado) y re-arma del overlay para la siguiente costura; interactúa con `AutoAdvanceEngine` (pendingTrackOpened/dspTrackStarted). Trade-offs: next/prev por notificación sin destino en dual, fase aproximada entre decoders, limiter por canal (EQ lineal equivale post-mezcla).
+4. ~~Visualizador estilo spectrogram + pulido de UX~~ ✅ (fase 5, 2026-10-21): `SpectrumAnalyzer` (FFT radix-2 + Hann, 6 tests) + tap post-EQ lock-free (`VisualizerTap`), barras de espectro en Compose, fila "Reproduciendo" con transporte ⏮▶⏸⏭, botones next/prev reales en la notificación para modo dual via custom layout con comandos propios `SKIP_NEXT/PREV`, `ApiCommandReceiver` unificado.
+5. (Fase 6, opcional) Widget de pantalla, tema oscuro, listas de reproducción guardadas.
 ## 8. Aspectos desconocidos y limitaciones
 
 - **El interior de libpowerampcore.so/libpeqcore.so no fue descompilado** (arm64/HEX sin Ghidra/IDA/Hopper): las matemáticas exactas del DSP de referencia no fueron verificadas binaridade; la equivalencia aquí es **familia de comportamiento** (RBJ biquads paramétricos + eventos de sesión), no bit-exacto.

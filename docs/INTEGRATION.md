@@ -1,5 +1,32 @@
 # PowerampFree — integration doc (original code, informed by REA findings)
 
+## External API (broadcast commands)
+
+Action: `com.powerampfree.player.API_COMMAND` — extra keys are namespaced:
+
+| key                            | value                                        |
+|--------------------------------|----------------------------------------------|
+| `com.powerampfree.player.cmd`  | `play` `pause` `playpause` `next` `previous` `seek` `set_preset` |
+| `com.powerampfree.player.arg`  | for `seek`: milliseconds; for `set_preset`: EqPreset JSON |
+
+The receiver forwards everything through a MediaController into the session,
+so the exact same code path the app UI uses gets exercised. Because manifest
+receivers do not receive implicit custom actions (Android 8+), the service also
+registers the same receiver dynamically at startup — implicit broadcasts work
+while the app process is alive, and explicit component broadcasts always work:
+
+```
+adb shell am broadcast -a com.powerampfree.player.API_COMMAND \
+  --es com.powerampfree.player.cmd set_preset \
+  --es com.powerampfree.player.arg '{"name":"Boost","preampDb":0.0,"bands":[{"type":"PEAKING","freqHz":1000,"gainDb":6.0,"q":0.9}]}'
+```
+
+Queue placement uses the session command `com.powerampfree.player.SET_QUEUE`
+(compact JSON track list) rather than relying on `setMediaItems` from a
+controller: during on-device verification media3's controller-side MediaItem
+serialization degraded a 288-item queue to 1 item when it crossed the binder
+(observed: `onSetMediaItems items=1 start=-1`).
+
 ## Architecture
 
 ```
@@ -18,6 +45,12 @@
 Pure JVM (:core:audio) — Biquad/Band/EqPreset/AutoEQLoader/ParametricEq/
 GainStage/SoftLimiter/DspChain/AutoAdvanceEngine — fully unit-tested.
 ```
+
+## That mapping, and honest naming
+
+Also shipped (paso 5): visualizador de espectro sobre tap post-EQ (FFT propia, jamás invasiva
+a la señal audible) y botones next/prev en notificación para modo dual (custom layout +
+`com.powerampfree.player.SKIP_NEXT/SKIP_PREV`).
 
 ## Playback service checklist
 
@@ -46,8 +79,24 @@ Reference-app behavior            Our original mechanism
 
 ## Received known-good places to integrate
 
-- `app/PlaybackService.kt` — created, marked `TODO(integrate)`: audio session id (`audioSessionId`),
-  MediaSession connection, playlist from MediaStore or manual SAF import.
-- EQ UI task: sliders per band (Compose or classic Views) reading/writing `EqPreset` JSON, feeding
-  `ParametricEq.responseCurve` for the drawn curve.
-- Optional crossfade: `AutoAdvanceEngine` overlap state can drive a two-decoder mix in future work.
+Estado (paso 2 completado, 2026-10-21): todos los TODO(integrate) del servicio están implementados.
+
+- ~~`app/PlaybackService.kt` — created, marked `TODO(integrate)`~~ → **implementado**: cola desde
+  MediaStore (`MediaStoreLibrary`) y SAF (`SafLibrary`), restauración de cola pausada al crear el
+  servicio, ticker de posición (persistencia cada 15 s + en transiciones), EQ en vivo por
+  MediaSession custom command `com.powerampfree.player.SET_PRESET` aplicado en
+  `DspAudioProcessor.applyPreset` (ruta reconfigure completa o incremental por ganancia según si
+  cambia la estructura de bandas), `AutoAdvanceEngine` conectado a los eventos de ExoPlayer
+  (`onMediaItemTransition`, `onPlaybackStateChanged(ENDED)`, `onIsPlayingChanged`) como observador
+  de continuidad con guards de sesión.
+- `app/MainActivity.kt` — **implementado**: biblioteca MediaStore + importación SAF, EQ con sliders
+  por banda (/preamp) ligados a `EqPreset`, curva de respuesta dibujada con la misma matemática
+  (`ParametricEq.responseCurve` sobre 48 kHz off-screen), presets con nombre en `filesDir/eq/`
+  (`PresetStore.saveNamed/listNamed`) y preset actual en prefs.
+- Crossfade real: **dos caminos implementados**. (a) Secuencial (audio en una sola tubería):
+  `CrossfadeProcessor` con fade-out de A + fade-in de B sample-exactos. (b) **Mezcla real de dos
+  decoders (paso 4)**: doble ExoPlayer con DSP propio, fade por plan en cada lado, mezcla a nivel
+  audio server (AudioTracks simultáneos), cola por orquestador + promoción de sesión
+  (`MediaSession.setPlayer`); activo cuando el crossfade > 0 (`dualMode`), exacto en el lado DSP
+  y aproximado inter-decoder en fase (documentado). `AutoAdvanceEngine.OVERLAP` rige el estado
+  lógico de la superposición (pendingTrackOpened→dspTrackStarted→promoción).

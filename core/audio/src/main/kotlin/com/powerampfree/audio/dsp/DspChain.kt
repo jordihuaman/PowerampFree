@@ -16,12 +16,21 @@ class DspChain(override val sampleRateHz: Int, val channels: Int, val processors
     }
 
     companion object {
-        /** Standard musical-truth order: trim/absolute level → tonal → safety. */
-        fun buildDefault(sampleRateHz: Int, channels: Int, preset: EqPreset, volume: Float = 1f): DspChain {
+        /** Standard musical-truth order: fades → trim/absolute level → tonal → safety. */
+        fun buildDefault(
+            sampleRateHz: Int,
+            channels: Int,
+            preset: EqPreset,
+            volume: Float = 1f,
+            crossfade: CrossfadeProcessor? = null,
+        ): DspChain {
             val gain = GainStage(sampleRateHz, contentGainDb = preset.preampDb, volumeLinear = volume)
             val eq = ParametricEq.build(ParametricEq.Config.of(preset.bands), sampleRateHz, channels)
             val limiter = SoftLimiter(sampleRateHz)
-            return DspChain(sampleRateHz, channels, listOf(gain, eq, limiter))
+            return DspChain(
+                sampleRateHz, channels,
+                listOfNotNull(crossfade, gain, eq, limiter),
+            )
         }
         fun processorsByName(chain: DspChain): List<String> = chain.processors.map { it::class.simpleName ?: "?" }
     }
