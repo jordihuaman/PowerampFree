@@ -96,7 +96,38 @@ like/dislike. Acciones observadas:
 - Navegación por metadatos: **Artist**, **Album**, **Folder**, **Genre**
   (saltar a la lista de ese artista/álbum/carpeta/género).
 
-Estado en PowerampFree: `PENDIENTE`.
+Estado en PowerampFree: `HECHA` el núcleo (sprint 6, 2026-10-22) — hoja
+inferior (`TrackContextMenu`: scrim + `Column` alineada abajo, renderizada
+DENTRO del content Box de `PafApp` para que reciba taps). Cabecera con
+título/artista/álbum, `dur · ext` (vía `extLabel`) y 👍/👎 de rating rápido.
+Acciones: **▶ Reproducir ahora**, **⏭ Ecolar siguiente**, **⤓ Ecolar al
+final de la cola**, **🎤 Ir a: \<artista\>**, **💿 Ir a: \<álbum\>**, **📁 Ir
+a: carpeta**, **📝 Letras**. Las filas de artista/álbum aparecen solo si ese
+campo del metadata no está en blanco y la etiqueta muestra el nombre real del
+artista/álbum. Long-press vía `combinedClickable` en las filas de QueueTab,
+TrackListView, FolderScreen y SearchTab. Navegación por metadatos con
+`NavRequest(kind 0/1/2 = artista/álbum/carpeta, key, albumId)` que viaja en
+el estado `gotoNav` de `PafApp`; `LibraryTab` lo consume con `LaunchedEffect`
+(pone el `GroupRow` de detalle o `folderPath`) y salta al tab Biblioteca. El
+encolar usa el comando de servicio `CMD_ENQUEUE_NEXT`
+(`com.powerampfree.player.ENQUEUE_NEXT`, con `EXTRA_ENQUEUE_END` para
+insertar al final) que encola tras el índice actual SIN interrumpir la
+reproducción (registrado en `onConnect` como session command).
+
+**Add to Playlist (sprint 10)** — fila **🔖 Añadir a Playlist** en el menú
+que abre `AddToPlaylistSheet`: filas de listas existentes con conteo (tap =
+añadir + toast; duplicado por uri detectado → toast "Ya estaba en…" y la
+lista no se toca) y fila **＋ Nueva playlist…** que abre un **AlertDialog
+M3** con TextField y "Crear y añadir". La pantalla Playlists (ver
+POWERAMP_FEATURES §4/§6 en esta misma pieza) lista las listas guardadas en
+`PlaylistStore` (un JSON por lista en `filesDir/playlists/`; name
+`PlaylistNames` de `:core:audio` — sanitize + unique — y snapshot del
+MediaTrack: uri/title/artist/album/durationMs/albId/trk/dir/at).
+`PlaylistsScreen` (contador + "＋ Nueva") y `PlaylistScreen` (▶ Reproducir /
+✏ Renombrar / 🗑 Eliminar + filas tap=playTracks, long-press=ctx menu,
+🗑 trailing quita la pista) cubren el flujo completo. Export/Import: bloque
+`playlists` en el backup JSON. Pendiente: **Delete**, **Info/Tags** y
+**Album Art** (sprints posteriores).
 
 ## 5. Letras (Lyrics)
 
@@ -108,7 +139,21 @@ Evidencia: `IMG:00.21.23 (2)`.
 - Cabecera compacta con carátula + título/artista + `duración | formato`.
 - Acceso desde el menú contextual de la pista (sección 4).
 
-Estado en PowerampFree: `PENDIENTE`.
+Estado en PowerampFree: `HECHA` (sprint 6, 2026-10-22) — overlay opaco
+`LyricsScreen` (dentro del content Box, con su propio `BackHandler { onClose() }`).
+Parser LRC puro Kotlin (`LrcParser` en `:core:audio`, con `LrcLine`/`activeIndex`,
+5 tests). Resolución de archivo `findLyrics()`: 1) ruta absoluta `file:` o la
+columna `DATA` de MediaStore del uri de audio → hermano `.lrc` con lectura
+directa `File`; 2) query MediaStore Files (`DISPLAY_NAME` + `RELATIVE_PATH`) →
+`openInputStream` vía `ContentUris` (los árboles SAF **no** se siguen —
+pendiente). Cabecera con título en marquee, `artista · dur · ext` y sufijo
+"(no es la pista actual)" cuando no coincide con la pista en reproducción.
+Posición muestreada cada 200 ms mientras sea la pista actual; línea activa =
+la última con `atMs <= posMs` (negrita `titleMedium`); tap en una línea hace
+`controller.seekTo(line.atMs)`. Estado de "seguir" con botón "⏯ Seguir" cuando
+se apaga (auto-scroll programático protegido con la flag `pendingAuto` para que
+el watcher de `isScrollInProgress` no lo cancele). Estado vacío "Sin letras /
+No hay archivo .lrc junto a esta pista." vía `findLyrics(...) ?: emptyList()`.
 
 ## 6. Ajustes — pantalla raíz (Settings)
 
@@ -186,9 +231,17 @@ La categoría Audio es un índice con estas sub-pantallas:
 - **Advanced Tweaks** — volume levels, MusicFX, reset de presets de
   ecualizador/reverb.
 
-Estado en PowerampFree: `PARCIAL` — crossfade hecho y audio focus básico
-viaja en media3; faltan ReplayGain, DVC, resampler, selección de salida y el
-resto.
+Estado en PowerampFree: `HECHA` la parte central (sprint 7, 2026-10-22) —
+**Audio Focus** con toggles Pause/Resume/Duck (`FocusPolicy` en `:core:audio`,
+decisión pura unit-tested; `PlaybackService` gestiona el foco con
+`AudioFocusRequest` y `handleAudioFocus=false` en ExoPlayer: duck = volumen
+absoluto del GainStage 0.3/1.0) y **Replay Gain** (enable + fuente
+pista/álbum + preamp ±12 dB almacenado en prefs `audio_settings`; trim que
+viaja por `GainStage.replayGainDb` apilándose con el preamp del EQ, aplicado
+en vivo vía `CMD_SET_REPLAY_GAIN`). El preamp actúa como trim global — el
+parsing de tags por pista queda pendiente. También hecho: crossfade (sprint 4/5,
+`playback_settings`). Faltan del bloque: sub-pantallas Audio Info,
+Resampler, DVC, selección de Output y Advanced Tweaks.
 
 ## 9. Ajustes — Misc (scrobbling, Android Auto)
 
@@ -217,8 +270,17 @@ Evidencia: `IMG:00.21.25`.
     (when playing)*.
   - Sección **Bluetooth** equivalente (idénticos pills).
 
-Estado en PowerampFree: `PARCIAL` — media3 ya gestiona audio focus y
-media-button básico; faltan estas opciones configurables.
+Estado en PowerampFree: `HECHA` (sprint 7, 2026-10-22) — `AudioSettings`
+(prefs `audio_settings`, incluida en Export/Import) + receptores en
+`PlaybackService`: pausa al desconectar (ACTION_AUDIO_BECOMING_NOISY),
+reanudar al enchufar Jack (ACTION_HEADSET_PLUG, sticky delivery sembrado con
+guard `plugInitialized`), reanudar al conectar BT (A2DP connection state),
+responder a botones (swallow de media keys cuando OFF) y acción configurable
+de pulsación simple por conexión (Jack/Bluetooth pills; preferencia del Jack
+cuando ambos conectados —KeyEvent no trae source, ambigüedad documentada—).
+Doble=next / triple=prev / larga=next quedan fijos por diseño
+(`HeadsetGestures` en `:core:audio`, 10 tests). Pendiente: pills dobles/triples
+configurables del original.
 
 ## 11. Ajustes — Library
 
@@ -247,11 +309,31 @@ Evidencia: `IMG:00.21.25 (1)`, `IMG:00.21.25 (2)`.
   **Playlists** (*user created playlists import/export* and options),
   **Shuffle** (shuffle options), **Scanner** (folders and library scanner
   options).
-- **Reset stats** (reset tracks played times, last played, and related stats).
 - **Restore Defaults**.
 
-Estado en PowerampFree: `PENDIENTE` — tenemos cola persistente; faltan
-listas guardadas, stats de reproducción y opciones de shuffle/scan.
+Estado en PowerampFree: `HECHA núcleo (sprint 9)` — lógica pura en
+`:core:audio` (`com.powerampfree.audio.library`, 12 tests):
+`TrackProgressPolicy` (progreso por pista solo para pistas ≥ umbral, slider
+1–90 min, def. **45**, toggle ON), `CountAsPlayedPolicy` (una escucha cuenta
+tras ≥ N % reproducido, slider 1–100 %, def. **50**; el avance natural cuenta
+siempre, pausar no cuenta), `LibraryFilterPolicy` (**Ignore Short Tracks**
+< 6 s — verificado en device: el rescan pasa de 288 → 286 pistas; video ya
+queda excluido de fuente, la consulta es `MediaStore.Audio`). Persistencia
+`TrackStateStore` (`filesDir/track_state.json`: pos+plays+last por uri).
+Cableado `PlaybackService`: commit en skip/seam/END/jump (stats bajo el
+umbral %, posición solo si la política la conserva), snapshot de posición en
+pausa y ticker de 15 s, restore al reabrir (SET_QUEUE / ⏮ / Cola tap) —
+verificado: B reabrió exactamente en su posición recordada (29 864 ms) y A en
+la suya (99 921 ms). Settings → **Biblioteca**: rescan, sección Per Track
+Progress (toggle + umbral), Count as played (umbral), Filtros (ignorar
+cortas), estadísticas (N pistas · N escuchas) y **Reset stats** (borra
+conteos, conserva posiciones). `library_settings` en `BACKUP_PREFS`;
+`track_state.json` se exporta/importa (sección `trackState`). Pendiente
+(honesto): Music Folders (selección de carpetas), Full Rescan con limpieza de
+tags, File Access Legacy Mode, sub-pantallas Lists/Search/Queue/Playlists/
+Shuffle/Scanner propias del catálogo, progreso por lista/carpeta individual,
+botones ±10 s condicionados a pistas largas (los nuestros son siempre
+visibles).
 
 ## 12. Ajustes — Album Art
 
@@ -276,7 +358,20 @@ Evidencia: `IMG:00.21.26 (3)`, `IMG:00.21.26 (4)`.
   Resolution Album Art, Always Send Album Art, API Compatibility (ver arriba).
 - **Restore Defaults**.
 
-Estado en PowerampFree: `PENDIENTE` — no mostramos ni enviamos carátula.
+Estado en PowerampFree: `HECHA núcleo (sprint 8)` — `AlbumArtLoader`
+MediaStore por `albumId` (provider albumart del sistema) → fallback de
+`CoverFileNames` (`cover.jpg`, `albumart.jpg`, `folder.jpg`, … × jpg/jpeg/png,
+prioridad testada) en la carpeta de la pista (ruta directa o `DATA`/`RELATIVE_PATH`);
+SAF árbol sin ruta local → glifo genérico (honesto, sin descarga por red).
+Tile de carátula en el player (160 dp) y mini-player (44 dp, glifo si no hay art).
+Settings → **Album Art**: Enviar carátula en alta resolución (ON), Mantener
+proporción (ON), diagnóstico de pista actual (albumId/carpeta + n/i del bus),
+Borrar cache (LruCache por bytes, 32 MiB, solo memoria). Prefs `art_settings`
+en `BACKUP_PREFS`. La carátula viaja en la metadata de la sesión (`artworkUri`
+del provider albumart) → tarjeta de medios del sistema / notificación con
+miniatura verificada en dumpsys + notificación. Pendiente (honesto): descarga
+por red, API compatibility, imágenes de artista, carátulas en filas/cabeceras
+de listas (floor del explorador), 24-bit RGB / Increase Resolution.
 
 ## 13. Ajustes — Background (fondo derivado de la carátula)
 
@@ -297,7 +392,16 @@ Evidencia: `IMG:00.21.26 (6)`.
 - **Background Intensity** (100%).
 - **Background Saturation** (150%).
 
-Estado en PowerampFree: `PENDIENTE` — el player usa fondo plano.
+Estado en PowerampFree: `HECHA núcleo (sprint 8)` — fondo del player derivado
+de la carátula: imagen del álbum cubriendo (`ContentScale.Crop`) + scrim
+gradiente vertical (alpha ligado al slider **Gradiente 0–10**, def. 4) con
+art **borroso** vía `Modifier.blur` (slider **Desenfoque 0–10**, def. 5, radio
+= valor×6 dp; API 31+; con blur=0 decodifica 1024 px para nitidez, 256 px en
+la vía borrosa). Sin art o toggle OFF → surface plano. Settings → **Album Art**
+(sub-pantalla única con la sección Fondo derivado: toggle ON, sliders
+Desenfoque y Gradiente). Toggles de List/Lyrics background y
+color/intensidad/saturación del gradiente → pendiente (honesto; listas y
+lyrics quedan con fondo plano, se anotan en el sprint de listas).
 
 ## 14. Ajustes — Visualization (visualizador MilkDrop)
 
@@ -325,9 +429,24 @@ Evidencia: `IMG:00.21.27 (1)`.
   **Rounded** (seleccionado), **Visualization in Library** (OFF).
 - **Restore Defaults**.
 
-Estado en PowerampFree: `PARCIAL` — tenemos visualizador propio de spectrum
-(FFT/Hann, barras); no hay motor de presets `.milk` (formato de terceros,
-fuera del alcance clean-room por ahora).
+Estado en PowerampFree: `HECHA el núcleo (sprint 10, 2026-10-22)` — spectrum
+propio FFT/Hann en el player y bajo la curva del EQ:
+- **Visualization On Player Screen** — toggle 📊 en la cabecera del player
+  (`viz_settings.player_spectrum`, default ON). Efecto inmediato (las barras
+  releen las prefs dentro del poll de 50 ms; sin push de sesión).
+- **Estilo de barras** — Classic (rects) / Rounded (cornerRadius 0.45·barW).
+- **Top Visualization Panel Opacity** — 0–100 %, default 60 (alfa 1:1 de las
+  barras; 60% = el alpha `0x99` original). Slider en la sub-pantalla
+  **Ajustes → Visualización** (nueva, con el resto de controles).
+- **Equalizer Screen Spectrum** — Disabled / Classic / Rounded (default
+  Rounded) al pie de la curva del tab EQ.
+- Export/Import: `viz_settings` incluido en `BACKUP_PREFS`.
+- Verificado en device: toggle ON/OFF con screencaps, Classic vs Rounded,
+  opacidad 17% vs 62% y espectro del EQ (ver VERIFICATION §Sprint 10).
+- Deuda honesta (fuera de alcance clean-room por ahora): motor de presets
+  **`.milk`** (formato de terceros) + rescans, **Visualization Delay**,
+  opciones de render (HD/Crop/30 FPS/Track Opacity…) y **Visualization in
+  Library**.
 
 ## 15. Menú principal (overlay) y Búsqueda
 
@@ -441,17 +560,17 @@ Add to Launcher (shortcut).
 | 1  | Player screen (rating, sleep timer, repeat/shuffle, info de formato) | HECHA (sprint 1; carátula+waveform en sprint 8) |
 | 2  | Bottom nav + mini-player persistente | HECHA (sprint 2; progreso en mini → sprint 8) |
 | 3  | Explorador de carpetas (breadcrumb, totales, selección) | HECHA núcleo (sprint 3; carátulas en sprint 8) |
-| 4  | Menú contextual de pista (Delete/Add to Playlist/Tags/Artist/…) | PENDIENTE |
-| 5  | Lyrics (línea sincronizada resaltada) | PENDIENTE |
+| 4  | Menú contextual de pista (Delete/Add to Playlist/Tags/Artist/…) | HECHA núcleo (sprint 6: play/encolar/ir-a artista-álbum-carpeta/letras + sprint 10: Añadir a Playlist; Delete/Tags/Album Art pendientes) |
+| 5  | Lyrics (línea sincronizada resaltada) | HECHA (sprint 6; parser LRC + tap-seek + follow; letras vía árbol SAF pendientes) |
 | 6  | Settings — pantalla raíz + Export/Import settings/data | HECHA núcleo (sprint 5; sub-pantallas: sprint 7+) |
 | 7  | Settings — Look and Feel (skin, tema, orientación, animaciones) | HECHA central (sprint 5); rest de opciones pendiente |
-| 8  | Settings — Audio (ReplayGain, DVC, resampler, output, focus) | PARCIAL |
+| 8  | Settings — Audio (ReplayGain, DVC, resampler, output, focus) | HECHA núcleo (sprint 7: Audio Focus toggles + Replay Gain preamp; quedan DVC, resampler, output, Audio Info) |
 | 9  | Settings — Misc (scrobbling, Android Auto) | PENDIENTE |
-| 10 | Settings — Headset/Bluetooth (pause/resume en conexión, botones) | PARCIAL |
-| 11 | Settings — Library (scanner, filtros, progreso por pista, stats) | PENDIENTE |
-| 12 | Settings — Album Art (descarga, calidad, envío a lock screen) | PENDIENTE |
-| 13 | Settings — Background (fondo borroso/gradiente de la carátula) | PENDIENTE |
-| 14 | Settings — Visualization (presets .milk, ajustes de render) | PARCIAL |
+| 10 | Settings — Headset/Bluetooth (pause/resume en conexión, botones) | HECHA (sprint 7: 6 toggles + acción de pulsación simple; doble/triple/larga fijos) |
+| 11 | Settings — Library (scanner, filtros, progreso por pista, stats) | HECHA núcleo (sprint 9: políticas + TrackStateStore + restore verificado + filtros 288→286; folders/full-rescan pendientes) |
+| 12 | Settings — Album Art (descarga, calidad, envío a lock screen) | HECHA núcleo (sprint 8: loader MediaStore+carpeta, artworkUri en metadata, tile player/mini, settings sin descarga) |
+| 13 | Settings — Background (fondo borroso/gradiente de la carátula) | HECHA núcleo (sprint 8: fondo player con blur/gradiente + sliders; listas/lyrics pendientes) |
+| 14 | Settings — Visualization (presets .milk, ajustes de render) | HECHA núcleo (sprint 10: espectro player ON/OFF 📊 + estilo Classic/Rounded + opacidad panel + espectro del EQ; .milk/Delay/render pendientes) |
 | 15 | Menú principal (overlay) + Búsqueda (filtros, historial) | Búsqueda HECHA + acceso a ajustes (sprint 5); ✕ por entrada pendiente |
 | 16 | Pantalla de EQ (10 bandas + curva + tone/bass/treble + chip estado) | HECHA núcleo (sprint 4; DVC + limiter-meter pendiente) |
 | 17 | Biblioteca — categorías (All Songs/Albums/Artists/Genres/…) | HECHA núcleo (sprint 2); categorías extra en sprint 9 |
@@ -500,15 +619,76 @@ Sprints ejecutados en este orden (cada uno con build verde + tests + docs):
    negrita, Start at Library), sub-pantalla Biblioteca (rescan) y
    Export/Import de datos a JSON. Bug del import (org.json narrows Long→Int)
    fijado con claves de ms como Long + lector tolerante.
-6. **Sprint 6 — Pista y letras (bloques 4 + 5)**: menú contextual de pista
-   (like/dislike/artist/album/folder navegar; Album Art, Tags-Info; delete con
-   confirmación) y letras sincronizadas LRC si existen junto al archivo.
-7. **Sprint 7 — Audio/Headset settings (bloques 8 + 10)**: pause/resume en
-   conexión de headset/BT, botones de auricular, opciones de focus.
-8. **Sprint 8 — Carátulas y fondo (bloques 12 + 13)**: art de MediaStore hacia
-   lockscreen/mini-player, fondo derivado de la carátula (sin descarga).
-9. **Sprint 9 — Library avanzada (bloque 11)**: scan options, progreso por
-   pista, stats/count-as-played, filtros.
-10. **Sprint 10 — Visualización avanzada + Misc (bloques 14 + 9)**: opciones de
-    render del visualizador propio, scrobbling/Auto si hay tiempo.
+6. **Sprint 6 — Pista y letras (bloques 4 + 5)** ✅ done (2026-10-22): menú contextual de pista
+   (hoja inferior con scrim; cabecera título/artista/álbum + `dur · ext` +
+   👍/👎; acciones ▶ Reproducir ahora / ⏭ Ecolar siguiente / ⤓ Ecolar al
+   final / 🎤 Ir a artista / 💿 Ir a álbum / 📁 Ir a carpeta / 📝 Letras;
+   long-press en QueueTab/TrackListView/FolderScreen/SearchTab) y **letras
+   sincronizadas LRC** (parser `LrcParser` en `:core:audio` + 5 tests,
+   resolución de `.lrc` junto al archivo, línea activa resaltada, auto-scroll
+   con follow, tap para seek, estado vacío). Navegación cross-tab con
+   `NavRequest` + `gotoNav`; ecolar con `CMD_ENQUEUE_NEXT` sin interrumpir.
+   Pendiente de este bloque: Delete, Add to Playlist, Info/Tags, Album Art y
+   letras desde árbol SAF.
+7. **Sprint 7 — Audio/Headset settings (bloques 8 + 10)** ✅ done (2026-10-22):
+   lógica pura en `:core:audio` (`HeadsetGestures` máquina de estados sin
+   reloj + 10 tests; `FocusPolicy` tabla de decisión + 12 tests) y cableado
+   Android en `PlaybackService` (AudioFocusRequest con USAGE_MEDIA/
+   CONTENT_TYPE_MUSIC gestionado por el servicio, ExoPlayer con
+   `handleAudioFocus=false`; duck por volumen absoluto del GainStage;
+   receptores NOISY/HEADSET_PLUG/A2DP con sticky-guard del plug; media keys
+   del hook con ventana de 350 ms y long 700 ms). `GainStage` + param
+   `replayGainDb` (última posición, apilamiento aditivo con el preamp del EQ)
+   y `CMD_SET_REPLAY_GAIN` en vivo. UI: sub-pantallas Settings → Audio y
+   Headset/Bluetooth; `audio_settings` entra en BACKUP_PREFS y el import
+   re-aplica el trim. Verificación en dispositivo: foco en `dumpsys audio`,
+   un click = acción configurada, doble/triple, swallow con respond OFF,
+   persistencia de prefs vía `run-as`. `:core:audio` 79 tests.
+8. **Sprint 8 — Carátulas y fondo (bloques 12 + 13)** ✅ done (2026-10-22):
+   `CoverFileNames` (lógica pura `:core:audio` + 6 tests) y `AlbumArtLoader`
+   (provider albumart del sistema por `albumId` → scan de carátulas en la
+   carpeta con `DATA`/`RELATIVE_PATH`, cache LruCache por bytes 32 MiB);
+   `artworkUri` en la metadata de la sesión (tarjeta de medios del sistema con
+   miniatura, verificada en la shade); tile de carátula 160 dp en el player +
+   44 dp en el mini-player con glifo honesto; fondo derivado (bloque 13) con
+   `Modifier.blur` (0–10, def. 5) + scrim de gradiente (0–10, def. 4), decode
+   1024 px cuando blur=0; Settings → **Album Art** (alta resolución, mantener
+   proporción, diagnóstico de pista, borrar cache) con `art_settings` en
+   `BACKUP_PREFS`. Fix estructural descubierto: `QueueStore` no persistía
+   `albId`/`dir`/`trk` (el restore perdía las pistas de art) — round-trip
+   corregido. `:core:audio` 85 tests. Pendiente: descarga por red, carátulas
+   en listas, listas/lyrics background, API compatibility.
+9. **Sprint 9 — Library avanzada (bloque 11)** ✅ done (2026-10-22): políticas
+   puras en `:core:audio` (`TrackProgressPolicy`, `CountAsPlayedPolicy`,
+   `LibraryFilterPolicy` + 12 tests), `TrackStateStore` (progreso por pista +
+   stats en `filesDir/track_state.json`), commits en skip/seam/END/jump y
+   snapshot en pausa/ticker; **restore verificado numéricamente** (SET_QUEUE
+   reabrió B en 29 864 ms exactos; Cola tap reabrió A en 99 921 ms); filtro
+   de pistas cortas < 6 s verificado en device (288 → 286 pistas); Settings →
+   Biblioteca con umbrales, filtros, stats y Reset stats. Fix de robustez
+   descubierto: `queue.json` con `index:-1` (⏮ en pista 0) crasheaba el
+   restore — guardas en save/load + ⏮@0 reinicia la pista (nunca -1).
+   `:core:audio` 97 tests. Pendiente: Music Folders, Full Rescan,
+   sub-pantallas del catálogo, progreso por lista/carpeta.
+10. **Sprint 10 — Playlists + Visualización del player (bloques 4/6 + 14 núcleo)** ✅
+    done (2026-10-22): **listas guardadas** — `AddToPlaylistSheet` (filas de
+    listas + dedupe por uri + `AlertDialog` "Nueva playlist" frente al fix MIUI
+    del botón inerte bajo el teclado), tarjetas 🔖 Playlists en Biblioteca,
+    `PlaylistsScreen` (contado + crear) y `PlaylistScreen` (▶/✏/🗑 + filas
+    tap=playTracks / long-press=ctx / 🗑 quita pista); `PlaylistNames` (core,
+    5 tests) + `PlaylistStore` (un JSON por lista con snapshot del MediaTrack);
+    export/import de playlists. **Visualización del player (bloque 14 núcleo)**
+    — toggle 📊 en la cabecera del player, estilo Classic/Rounded, opacidad del
+    panel (slider) y **Equalizer Screen Spectrum** (Disabled/Classic/Rounded)
+    bajo la curva del EQ; `VizSettings` (prefs `viz_settings`) re-leído en vivo
+    desde el poll de 50 ms (efecto inmediato en player y EQ, sin push de
+    sesión); `viz_settings` en `BACKUP_PREFS`. **Fix descubierto y corregido**:
+    los botones ⏮/⏭ de la cabecera del player y del mini-player tenían sus
+    acciones cruzadas (⏮ enviaba CMD_SKIP_NEXT y ⏭ CMD_SKIP_PREV) desde el
+    sprint 1 — intercambiadas y verificadas en device (⏭ avanza a la pista
+    siguiente, ⏮ vuelve a la anterior, con cola de biblioteca completa).
+    Verificado end-to-end en device (ver VERIFICATION §Sprint 10).
+    `:core:audio` **102 tests** (97 + 5 `PlaylistNamesTest`). Pendiente: List
+    Memory por lista (bloque 18), presets `.milk`/Visualization Delay/opciones
+    de render (bloque 14 restante), scrobbling/Auto (bloque 9).
 

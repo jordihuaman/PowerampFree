@@ -3,6 +3,7 @@ package com.powerampfree.player
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,6 +21,14 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.ListenableFuture
 import com.powerampfree.audio.engine.AutoAdvanceEngine
+import com.powerampfree.audio.focus.FocusAction
+import com.powerampfree.audio.focus.FocusChange
+import com.powerampfree.audio.focus.FocusPolicy
+import com.powerampfree.audio.focus.FocusToggles
+import com.powerampfree.audio.input.HeadsetAction
+import com.powerampfree.audio.input.HeadsetGestures
+import com.powerampfree.audio.library.CountAsPlayedPolicy
+import com.powerampfree.audio.library.TrackProgressPolicy
 import com.powerampfree.audio.util.ShuffleOps
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
@@ -185,6 +194,7 @@ class PlaybackService : MediaSessionService() {
                     advanceOrchestrator()
                 }
                 playbackState == Player.STATE_ENDED && !dualMode -> {
+                    commitTrackState() // single mode natural end (pos == dur)
                     advanceEngine.dspTrackEnded(currentSid())
                 }
             }
@@ -197,11 +207,18 @@ class PlaybackService : MediaSessionService() {
                 startSaveTicker()
                 // refresh fade plan against the live clock after stream resume
                 planPrimaryCrossfade()
+                // Hold audio focus while playing (block 8); clears a focus pause.
+                ensureAudioFocus()
+                focusPaused = false
             } else {
                 stopSaveTicker()
                 saveQueueSnapshot()
+                saveListeningProgress() // block 11: pause keeps the playhead
                 // Freeze the whole mix on user pause: the overlay halts too.
                 if (fadeActive) overlay?.player?.pause()
+                // Release focus on a user pause/end, but keep it across a
+                // focus-induced pause so the later GAIN can resume.
+                if (!focusPaused) abandonAudioFocus()
             }
         }
 
@@ -248,6 +265,61 @@ class PlaybackService : MediaSessionService() {
 
     // --------------------------------------------------------- orchestrator
 
+    /** Active track descriptor off the live player (works in both modes). */
+    private fun activeTrackFromPlayer(): Pair<String, Long>? {
+        val p = primary.player ?: return null
+        val mi = p.currentMediaItem ?: return null
+        val uri = mi.localConfiguration?.uri?.toString() ?: return null
+        val dur = mi.mediaMetadata.extras?.getLong(EXTRA_DURATION_MS) ?: 0L
+        return uri to dur
+    }
+
+    /**
+     * Block 11 bookkeeping for the track leaving the playhead: stats commit
+     * under the "count as played" threshold, progress snapshot for tracks the
+     * per-track progress policy keeps. Call when the OUTGOING track is still
+     * the player's current item (skip/ended/seam), never after switching.
+     */
+    private fun commitTrackState() {
+        val (uri, dur) = activeTrackFromPlayer() ?: return
+        val pos = primary.player?.currentPosition ?: 0L
+        val keep = TrackProgressPolicy.keepProgress(
+            dur,
+            LibrarySettings.progressMinMinutes(this),
+            LibrarySettings.storeProgress(this),
+        )
+        val count = CountAsPlayedPolicy.counts(pos, dur, LibrarySettings.countPct(this))
+        android.util.Log.i(
+            TAG, "commitTrackState uri=$uri pos=$pos dur=$dur keep=$keep count=$count",
+        )
+        when {
+            count -> TrackStateStore.commitCount(this, uri, if (keep) pos else 0L)
+            keep -> TrackStateStore.saveProgress(this, uri, pos)
+        }
+    }
+
+    /** Progress-only snapshot on pause (stats are counted on advances only). */
+    private fun saveListeningProgress() {
+        if (!LibrarySettings.storeProgress(this)) return
+        val (uri, dur) = activeTrackFromPlayer() ?: return
+        if (!TrackProgressPolicy.keepProgress(
+                dur, LibrarySettings.progressMinMinutes(this),
+                toggledOn = true,
+            )
+        ) return
+        TrackStateStore.saveProgress(this, uri, primary.player?.currentPosition ?: 0L)
+    }
+
+    /** Resolved opening position for [track] (0 = start from the beginning). */
+    private fun restorePositionFor(track: MediaTrack): Long {
+        if (!TrackProgressPolicy.keepProgress(
+                track.durationMs, LibrarySettings.progressMinMinutes(this),
+                LibrarySettings.storeProgress(this),
+            )
+        ) return 0L
+        return TrackStateStore.positionFor(this, track.uri)
+    }
+
     /** Starts playback of [queueIndex] from orchestrator state (dual/queued restore). */
     private fun playCurrentItem(positionMs: Long) {
         if (queueIndex !in queueTracks.indices) return
@@ -258,13 +330,14 @@ class PlaybackService : MediaSessionService() {
         oldOverlay?.release()
         advanceEngine.currentTrackOpened(sidOf(queueIndex))
 
-        val item = queueTracks[queueIndex].toMediaItem()
-        val beam = buildBeam(withFocus = true)
-        if (positionMs > 0L) {
-            beam.player?.setMediaItem(item, positionMs)
-        } else {
-            beam.player?.setMediaItem(item)
-        }
+        val track = queueTracks[queueIndex]
+        // Per-track progress (block 11): an open without an explicit position
+        // resumes the remembered playhead for qualifying long tracks only.
+        val pos = if (positionMs > 0L) positionMs else restorePositionFor(track)
+        val item = track.toMediaItem()
+        // Focus is managed by the service (block 8 toggles), not by ExoPlayer.
+        val beam = buildBeam(withFocus = false)
+        beam.player?.setMediaItem(item, pos)
         beam.player?.prepare()
         beam.player?.play()
         // Give the session the live beam: the audible engine changes, so the
@@ -318,6 +391,7 @@ class PlaybackService : MediaSessionService() {
             cancelPendingFadeFinish()
             return
         }
+        commitTrackState() // outgoing track finished (still the session player)
         advanceEngine.dspTrackStarted(sidOf(queueIndex + 1)) // engine promotion
         fadeActive = false
         cancelPendingFadeFinish()
@@ -341,6 +415,10 @@ class PlaybackService : MediaSessionService() {
     /** Instant advance (skip / next-media-button / end-without-overlay). */
     private fun advanceOrchestrator() {
         if (!dualMode) return
+        android.util.Log.i(
+            TAG, "advanceOrchestrator qi=$queueIndex n=${queueTracks.size} repAll=$isRepeatAll",
+        )
+        commitTrackState() // outgoing track: ended (pos≈dur) or user skip
         var next = queueIndex + 1
         if ((next !in queueTracks.indices) && isRepeatAll && queueTracks.isNotEmpty()) {
             next = 0 // repeat all: continuous replay of the whole queue
@@ -449,12 +527,23 @@ class PlaybackService : MediaSessionService() {
 
     private fun skipNext() {
         android.util.Log.i(TAG, "skipNext dual=$dualMode")
-        if (dualMode) advanceOrchestrator() else primary.player?.seekToNextMediaItem()
+        if (dualMode) advanceOrchestrator() else {
+            commitTrackState() // single mode: outgoing track (player-based)
+            primary.player?.seekToNextMediaItem()
+        }
     }
 
     private fun skipPrevious() {
-        if (queueIndex - 1 !in queueTracks.indices && !dualMode) {
+        commitTrackState() // outgoing position, before any index change
+        android.util.Log.i(TAG, "skipPrevious qi=$queueIndex n=${queueTracks.size} dual=$dualMode")
+        if (!dualMode && queueIndex - 1 !in queueTracks.indices) {
             primary.player?.seekToPreviousMediaItem()
+            return
+        }
+        if (dualMode && queueIndex == 0) {
+            // ⏮ at the first track: restart it (never queueIndex=-1).
+            QueueBus.publish(queueTracks, 0)
+            dualModeOrchestratorPlayPrevious()
             return
         }
         queueIndex -= 1
@@ -468,6 +557,7 @@ class PlaybackService : MediaSessionService() {
     private fun queueJump(idx: Int) {
         cancelPendingFadeFinish()
         fadeActive = false
+        commitTrackState() // outgoing track, before index change
         queueIndex = idx
         plannedRealDurationMs = -1L
         playCurrentItem(0L)
@@ -486,6 +576,7 @@ class PlaybackService : MediaSessionService() {
         val snapshot: List<MediaTrack>
         val index: Int
         if (dualMode) {
+            if (queueIndex !in queueTracks.indices) return // corrupt index guard
             snapshot = queueTracks
             index = queueIndex
         } else {
@@ -514,6 +605,7 @@ class PlaybackService : MediaSessionService() {
         override fun run() {
             if (primary.player?.isPlaying == true) {
                 saveQueueSnapshot()
+                saveListeningProgress() // block 11: periodic playhead backup
                 mainHandler.postDelayed(this, SAVE_PERIOD_MS)
             }
         }
@@ -538,6 +630,7 @@ class PlaybackService : MediaSessionService() {
                 .add(SessionCommand(CMD_ENQUEUE_NEXT, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SET_REPEAT, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SET_SHUFFLE, Bundle.EMPTY))
+                .add(SessionCommand(CMD_SET_REPLAY_GAIN, Bundle.EMPTY))
                 .build()
             // Custom layout: real skip buttons live in the notification/UI even
             // in dual mode, where the single-item session player cannot serve
@@ -664,6 +757,11 @@ class PlaybackService : MediaSessionService() {
                     completed(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
             }
+            CMD_SET_REPLAY_GAIN -> {
+                // Prefs already persisted by the UI; re-apply the trim live.
+                applyReplayGain()
+                completed(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
             else -> completed(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
         }
 
@@ -688,7 +786,9 @@ class PlaybackService : MediaSessionService() {
             } else {
                 val p = primary.player ?: return
                 applyNativePlayerFlags(p)
-                p.setMediaItems(tracks.map { it.toMediaItem() }, start, 0L)
+                val startTrack = tracks[start]
+                val startPos = restorePositionFor(startTrack)
+                p.setMediaItems(tracks.map { it.toMediaItem() }, start, startPos)
                 p.prepare()
                 p.play()
                 QueueBus.publish(tracks, start)
@@ -771,6 +871,45 @@ class PlaybackService : MediaSessionService() {
             )
         }
 
+        /**
+         * Headset/media buttons (block 10). Honours the respond-to-buttons
+         * toggle (off ⇒ swallow everything); a hook button resolves through
+         * [gestures] (single/double/triple/long press), while standard media
+         * keys map straight to our engine so next/previous work in dual mode.
+         */
+        override fun onMediaButtonEvent(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            intent: Intent,
+        ): Boolean {
+            if (!AudioSettings.respondToButtons(applicationContext)) return true // swallow
+            @Suppress("DEPRECATION")
+            val event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+                as? android.view.KeyEvent
+                ?: return super.onMediaButtonEvent(session, controller, intent)
+            return when (event.keyCode) {
+                android.view.KeyEvent.KEYCODE_HEADSETHOOK -> {
+                    handleHook(event); true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                    enginePlay(); true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    enginePause(); true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                    engineToggle(); true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                    skipNext(); true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    skipPrevious(); true
+                }
+                else -> super.onMediaButtonEvent(session, controller, intent)
+            }
+        }
+
         // Dual-mode trade-off (documented): the session player holds exactly one
         // item, so player-level next/previous have no visible item to seek.
         // Advancement is driven by the orchestrator on natural track ends and
@@ -778,13 +917,241 @@ class PlaybackService : MediaSessionService() {
     }
     private fun skipNextUnused() = Unit
 
+    // --------------------------------------------------- audio focus (8)
+
+    private var audioManager: android.media.AudioManager? = null
+    private var focusRequest: android.media.AudioFocusRequest? = null
+    private var haveFocus = false
+    /** True only when WE paused due to a focus loss (a user pause never sets it). */
+    private var focusPaused = false
+    private var focusDucked = false
+
+    private fun focusToggles() = FocusToggles(
+        pause = AudioSettings.focusPause(applicationContext),
+        resume = AudioSettings.focusResume(applicationContext),
+        duck = AudioSettings.focusDuck(applicationContext),
+    )
+
+    private val focusListener =
+        android.media.AudioManager.OnAudioFocusChangeListener { change ->
+            handleFocusChange(change)
+        }
+
+    private fun buildFocusRequestIfNeeded() {
+        if (focusRequest != null) return
+        val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+            ?: return
+        audioManager = am
+        focusRequest = android.media.AudioFocusRequest.Builder(
+            android.media.AudioManager.AUDIOFOCUS_GAIN,
+        )
+            .setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build(),
+            )
+            .setOnAudioFocusChangeListener(focusListener, mainHandler)
+            .setWillPauseWhenDucked(false)
+            .build()
+    }
+
+    private fun ensureAudioFocus() {
+        buildFocusRequestIfNeeded()
+        val am = audioManager ?: return
+        val req = focusRequest ?: return
+        if (haveFocus) return
+        haveFocus = am.requestAudioFocus(req) ==
+            android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonAudioFocus() {
+        val am = audioManager ?: return
+        val req = focusRequest ?: return
+        if (haveFocus) am.abandonAudioFocusRequest(req)
+        haveFocus = false
+        focusPaused = false
+        if (focusDucked) {
+            focusDucked = false
+            primary.dsp?.setDuck(false)
+            overlay?.dsp?.setDuck(false)
+        }
+    }
+
+    private fun handleFocusChange(change: Int) {
+        val fc = when (change) {
+            android.media.AudioManager.AUDIOFOCUS_GAIN -> FocusChange.GAIN
+            android.media.AudioManager.AUDIOFOCUS_LOSS -> FocusChange.LOSS
+            android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> FocusChange.LOSS_TRANSIENT
+            android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
+                FocusChange.LOSS_TRANSIENT_CAN_DUCK
+            else -> return
+        }
+        val playing = primary.player?.isPlaying == true
+        val action = FocusPolicy.onEvent(fc, focusToggles(), focusPaused, focusDucked)
+        when (action) {
+            FocusAction.PAUSE -> if (playing) {
+                focusPaused = true
+                enginePause()
+            }
+            FocusAction.RESUME -> {
+                enginePlay()
+                focusPaused = false
+            }
+            FocusAction.DUCK -> if (playing && !focusDucked) {
+                focusDucked = true
+                primary.dsp?.setDuck(true)
+                overlay?.dsp?.setDuck(true)
+            }
+            FocusAction.RESTORE -> if (focusDucked) {
+                focusDucked = false
+                primary.dsp?.setDuck(false)
+                overlay?.dsp?.setDuck(false)
+            }
+            FocusAction.NONE -> {}
+        }
+        // A permanent loss drops our request; a later play re-requests.
+        if (fc == FocusChange.LOSS) haveFocus = false
+    }
+
+    // ------------------------------------------------ headset buttons (10)
+
+    private val gestures = HeadsetGestures()
+    private var wiredConnected = false
+    private var btConnected = false
+    private var plugInitialized = false
+
+    private val gestureResolve = Runnable { dispatchGesture(gestures.onResolveWindow()) }
+    private val gestureLong = Runnable { dispatchGesture(gestures.onLongElapsed()) }
+
+    private fun enginePlay() {
+        primary.player?.play()
+        if (fadeActive) overlay?.player?.play()
+    }
+
+    private fun enginePause() {
+        primary.player?.pause()
+        if (fadeActive) overlay?.player?.pause()
+    }
+
+    private fun engineToggle() {
+        if (primary.player?.isPlaying == true) enginePause() else enginePlay()
+    }
+
+    private fun handleHook(event: android.view.KeyEvent) {
+        when (event.action) {
+            android.view.KeyEvent.ACTION_DOWN -> {
+                if (event.repeatCount == 0) {
+                    mainHandler.removeCallbacks(gestureLong)
+                    mainHandler.postDelayed(gestureLong, gestures.longPressMs)
+                }
+                gestures.onDown(event.repeatCount)
+            }
+            android.view.KeyEvent.ACTION_UP -> {
+                mainHandler.removeCallbacks(gestureLong)
+                mainHandler.removeCallbacks(gestureResolve)
+                gestures.onUp()
+                mainHandler.postDelayed(gestureResolve, gestures.doubleWindowMs)
+            }
+        }
+    }
+
+    private fun dispatchGesture(action: HeadsetAction?) {
+        when (action) {
+            HeadsetAction.SINGLE -> performSinglePress()
+            HeadsetAction.DOUBLE_NEXT -> skipNext()
+            HeadsetAction.TRIPLE_PREV -> skipPrevious()
+            HeadsetAction.LONG_NEXT -> if (primary.player?.isPlaying == true) skipNext()
+            else -> {}
+        }
+    }
+
+    /**
+     * Single press maps by the active connection (wired preferred when both
+     * are up). Ambiguity (a BT button while wired is plugged) resolves to the
+     * wired action — documented, since a hook KeyEvent carries no source.
+     */
+    private fun performSinglePress() {
+        val action = if (wiredConnected || !btConnected) {
+            AudioSettings.wiredAction(applicationContext)
+        } else {
+            AudioSettings.btAction(applicationContext)
+        }
+        when (action) {
+            AudioSettings.ACTION_NEXT -> skipNext()
+            AudioSettings.ACTION_PREV -> skipPrevious()
+            else -> engineToggle()
+        }
+    }
+
+    private fun applyReplayGain() {
+        val db = AudioSettings.rgAppliedDb(applicationContext)
+        android.util.Log.i(TAG, "applyReplayGain db=$db")
+        primary.dsp?.setReplayGain(db)
+        overlay?.dsp?.setReplayGain(db)
+    }
+
+    private val noisyReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY &&
+                AudioSettings.pauseOnDisconnect(applicationContext)
+            ) {
+                enginePause()
+            }
+        }
+    }
+
+    private val headsetPlugReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != Intent.ACTION_HEADSET_PLUG) return
+            val state = intent.getIntExtra("state", -1)
+            // ACTION_HEADSET_PLUG is sticky: the first delivery is the current
+            // state, which we seed without triggering a resume-on-plug.
+            if (!plugInitialized) {
+                plugInitialized = true
+                wiredConnected = state == 1
+                return
+            }
+            val was = wiredConnected
+            wiredConnected = state == 1
+            if (wiredConnected && !was && AudioSettings.resumeOnWired(applicationContext)) {
+                enginePlay()
+            }
+        }
+    }
+
+    private val btReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != BT_A2DP_CONNECTION_CHANGED) return
+            val state = intent.getIntExtra(BT_EXTRA_STATE, -1)
+            val was = btConnected
+            btConnected = state == BT_STATE_CONNECTED
+            if (btConnected && !was && AudioSettings.resumeOnBluetooth(applicationContext)) {
+                enginePlay()
+            }
+        }
+    }
+
+    private fun registerHeadsetReceivers() {
+        // NOISY + BT A2DP connection state (block 10).
+        runCatching {
+            registerReceiver(noisyReceiver, IntentFilter(android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+        }
+        runCatching {
+            registerReceiver(headsetPlugReceiver, IntentFilter(Intent.ACTION_HEADSET_PLUG))
+        }
+        runCatching {
+            registerReceiver(btReceiver, IntentFilter(BT_A2DP_CONNECTION_CHANGED))
+        }
+    }
+
     // -------------------------------------------------------- service hooks
 
     override fun onCreate() {
         super.onCreate()
         android.util.Log.i(TAG, "service onCreate: building players + session")
         advanceEngine = AutoAdvanceEngine(advanceListener)
-        primary = buildBeam(withFocus = true)
+        primary = buildBeam(withFocus = false)
         mediaSession = MediaSession.Builder(this, primary.player!!)
             .setCallback(sessionCallback)
             .build()
@@ -798,6 +1165,8 @@ class PlaybackService : MediaSessionService() {
                 androidx.core.content.ContextCompat.RECEIVER_EXPORTED,
             )
         }
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+        registerHeadsetReceivers()
         restoreQueue()
         mainHandler.postDelayed(fadeWatcher, WATCHER_PERIOD_MS)
     }
@@ -805,6 +1174,7 @@ class PlaybackService : MediaSessionService() {
     /** Queue restore: once, paused, at the saved position (no autoplay on boot). */
     private fun restoreQueue() {
         val saved = QueueStore.load(this) ?: return
+        if (saved.startIndex !in saved.items.indices) return // corrupt snapshot
         val beam = primary
         if (dualMode) {
             queueTracks = saved.items
@@ -840,6 +1210,12 @@ class PlaybackService : MediaSessionService() {
         saveQueueSnapshot()
         stopSaveTicker()
         cancelPendingFadeFinish()
+        mainHandler.removeCallbacks(gestureResolve)
+        mainHandler.removeCallbacks(gestureLong)
+        runCatching { unregisterReceiver(noisyReceiver) }
+        runCatching { unregisterReceiver(headsetPlugReceiver) }
+        runCatching { unregisterReceiver(btReceiver) }
+        abandonAudioFocus()
         overlay?.release()
         overlay = null
         primary.release()
@@ -886,6 +1262,13 @@ class PlaybackService : MediaSessionService() {
         const val CMD_ENQUEUE_NEXT = "com.powerampfree.player.ENQUEUE_NEXT"
         const val CMD_SET_REPEAT = "com.powerampfree.player.SET_REPEAT"
         const val CMD_SET_SHUFFLE = "com.powerampfree.player.SET_SHUFFLE"
+        const val CMD_SET_REPLAY_GAIN = "com.powerampfree.player.SET_REPLAY_GAIN"
+
+        // Bluetooth A2DP connection state (block 10).
+        private const val BT_A2DP_CONNECTION_CHANGED =
+            "android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED"
+        private const val BT_EXTRA_STATE = "android.bluetooth.profile.extra.STATE"
+        private const val BT_STATE_CONNECTED = 2 // BluetoothProfile.STATE_CONNECTED
         const val EXTRA_PRESET_JSON = "com.powerampfree.player.preset_json"
         const val EXTRA_CROSSFADE_MS = "crossfade_ms"
         const val EXTRA_DURATION_MS = "durationMs"

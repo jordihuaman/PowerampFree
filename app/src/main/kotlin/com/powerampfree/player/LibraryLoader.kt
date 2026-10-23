@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
 import androidx.documentfile.provider.DocumentFile
+import com.powerampfree.audio.library.LibraryFilterPolicy
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -72,6 +73,12 @@ data class MediaTrack(
                     .setArtist(artist)
                     .setAlbumTitle(album)
                     .apply {
+                        // Album art of the system library travels in metadata:
+                        // notification / lockscreen / session consumers obtain
+                        // it without extra code (sprint 8).
+                        if (albumId >= 0) {
+                            setArtworkUri(AlbumArtLoader.artUri(albumId))
+                        }
                         if (durationMs > 0) {
                             setExtras(android.os.Bundle().apply {
                                 putLong("durationMs", durationMs)
@@ -122,7 +129,11 @@ object MediaStoreLibrary {
                 val albumId = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
                 val track = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
                 val path = c.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+                val ignoreShort = LibrarySettings.ignoreShort(context)
                 while (c.moveToNext()) {
+                    val d = c.getLong(dur)
+                    // Block 11 filters: notifications etc. out of the library.
+                    if (!LibraryFilterPolicy.admits(d, ignoreShort)) continue
                     val uri = ContentUris.withAppendedId(
                         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, c.getLong(id),
                     )
@@ -131,7 +142,7 @@ object MediaStoreLibrary {
                         title = c.getString(title) ?: "?",
                         artist = c.getString(artist) ?: "",
                         album = c.getString(album) ?: "",
-                        durationMs = c.getLong(dur),
+                        durationMs = d,
                         albumId = c.getLong(albumId),
                         trackNo = c.getInt(track),
                         folder = if (path >= 0) c.getString(path) ?: "" else "",

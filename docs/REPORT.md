@@ -134,13 +134,15 @@ app/src/main/kotlin/com/powerampfree/player/
 
 ## 6. Resultados de verificación
 
-Gradle `:core:audio:test` (JVM): **49 tests / 0 fallos** (25 DSP + 9 crossfade + 6 espectro + 6 shuffle + 3 capas EQ/limitador).
+Gradle `:core:audio:test` (JVM): **97 tests / 0 fallos** (Biquad 6 + crossfade 9 + espectro 6 + paramEQ 7 + shuffle 6 + cadena/presets 12 + AutoAdvance 6 + LRC 5 + **FocusPolicy 12 + HeadsetGestures 10**, incluidos 3 nuevos de Replay Gain, + CoverFileNames 6 + **LibraryPolicies 12**, sprint 9).
 UI de app: navegación de 5 tabs + mini-player + cola + búsqueda + categorías
 MediaStore (`QueueBus` mismo proceso; `SEEK_QUEUE` propio) + explorador de
 carpetas con breadcrumb/totales/selección/sort + EQ gráfico (tabs EQ/Tone/Limit,
 10 bandas + preamp, knobs Tone, limitador, chip) + **Ajustes** (raíz con
 overlay, tema Auto/Claro/Oscuro + acento + negrita + start-at-library,
-rescan, Export/Import de datos con bug de tipos corregido).
+rescan, Export/Import de datos con bug de tipos corregido) + **menú
+contextual de pista** (play/encolar/ir-a artista-álbum-carpeta/letras) +
+**letras LRC sincronizadas** (parser, línea activa, tap-seek, follow).
 `:app:assembleDebug` verde.
 Criterios destacados:
 
@@ -179,8 +181,90 @@ Criterios destacados:
     color, negrita, Start at Library), rescan de biblioteca y Export/Import
     de datos a JSON (Documents/PowerampFree; bug org.json Long→Int fixed).
     Verificado en dispositivo (`VERIFICATION.md` §Sprint 5; 49/49 tests).
-11. **Próximo — Sprint 6 (bloques 4 + 5)**: menú contextual de pista y letras
-    sincronizadas.
+11. **Sprint 6 — Menú contextual + letras (2026-10-22)** ✅: `TrackContextMenu`
+    (hoja inferior con scrim dentro del content Box; cabecera + rating 👍/👎;
+    ▶ Reproducir ahora / ⏭ Ecolar siguiente / ⤓ Ecolar al final / 🎤 Ir a
+    artista / 💿 Ir a álbum / 📁 Ir a carpeta / 📝 Letras; long-press en 4
+    listas) y **letras LRC sincronizadas** (`LrcParser` en `:core:audio` + 5
+    tests, resolución de `.lrc` junto al archivo, línea activa + auto-scroll
+    follow + tap-seek). Ecolar con `CMD_ENQUEUE_NEXT` sin interrumpir;
+    navegación cross-tab con `NavRequest`/`gotoNav`. Fix estructural: los
+    overlays deben vivir dentro del content Box (fuera eran touch-inert).
+    Verificado en dispositivo (`VERIFICATION.md` §Sprint 6; 54/54 tests).
+12. **Sprint 7 — Audio/headset settings (2026-10-22)** ✅: lógica pura en
+    `:core:audio` (`HeadsetGestures`: hook con ventana doble 350 ms / long
+    700 ms; `FocusPolicy`: tabla evento→acción con pausa/reanudar/duck —
+    12 tests) + `AudioSettings` (prefs `audio_settings`) y cableado en
+    `PlaybackService`: AudioFocusRequest gestionada por el servicio
+    (`ExoBeam(withFocus=false)`), duck por volumen absoluto del GainStage,
+    receptores NOISY / HEADSET_PLUG (sticky guard) / A2DP, media keys con
+    swallow cuando respond OFF y acción de pulsación simple configurable por
+    conexión (Jack preferido si ambos, documentado). `GainStage.replayGainDb`
+    apilado con el preamp del EQ + `CMD_SET_REPLAY_GAIN` en vivo. UI: Settings
+    → Audio y Headset/Bluetooth; `audio_settings` en Export/Import con
+    re-apply al importar. Verificado en dispositivo (`VERIFICATION.md`
+    §Sprint 7; 79/79 tests): foco en `dumpsys audio`, click=siguiente,
+    toggle con hook y key 85, swallow con respond OFF, prefs por `run-as`.
+14. **Sprint 8 — Carátulas y fondo (2026-10-22)** ✅: lógica pura en
+    `:core:audio` (`CoverFileNames` candidatos de carátulas por carpeta,
+    6 tests) + `AlbumArtLoader` (proveedor albumart del sistema por
+    `albumId` → scan de `Cover.jpg` en la carpeta con `DATA`/`RELATIVE_PATH`;
+    cache LruCache por bytes 32 MiB); `artworkUri` en la metadata de la
+    sesión (tarjeta de medios del sistema con miniatura verificada en la
+    shade); tile 160 dp en el player + 44 dp en el mini-player con glifo
+    honesto; fondo derivado de la carátula con `Modifier.blur` (Desenfoque
+    0–10, def. 5) + scrim de gradiente (0–10, def. 4), decode 1024 px con
+    blur=0; Settings → **Album Art** (alta resolución, mantener proporción,
+    diagnóstico de pista, borrar cache) con `art_settings` en
+    `BACKUP_PREFS`. Fix estructural: `QueueStore` no persistía
+    `albId`/`dir`/`trk` — tras cada restore el art era imposible
+    (`albumId=-1`); round-trip corregido y verificado en `queue.json`.
+    Lección compose: no anidar cadenas de weight en Rows dentro del Box del
+    fondo (el header se rompía); carátula en fila propia centrada.
+    Verificado en dispositivo (`VERIFICATION.md` §Sprint 8; **85/85**
+    tests): tile+fondo con cover de prueba (paf_shot9..12.png), sliders
+    operativos y persistidos, notificación del sistema con miniatura,
+    cover de prueba eliminada tras verificar y prefs restauradas a
+    defaults.
+16. **Sprint 9 — Library avanzada (2026-10-22)** ✅: políticas puras en
+    `:core:audio` (`TrackProgressPolicy` umbral 1–90 min def. 45,
+    `CountAsPlayedPolicy` 1–100 % def. 50, `LibraryFilterPolicy` cortas
+    < 6 s — 12 tests) + `TrackStateStore` (`filesDir/track_state.json`:
+    posición + plays + last por uri). Cableado: commit de stats en
+    skip/seam/frame-END/jump (pausa solo guarda posición), snapshot en el
+    ticker de 15 s, y **restore per-track al reabrir** (SET_QUEUE/⏮/Cola).
+    Verificado en dispositivo (`VERIFICATION.md` §Sprint 9; **97/97**
+    tests): B reabrió exacta en 29 864 ms, A en 99 921 ms vía Cola; pausa
+    guardó 184 669 ms sin contar; filtro de cortas 288 → 286 pistas en el
+    rescan; Reset stats (plays a 0, posiciones conservadas). Fix de
+    robustez: `queue.json` con índice -1 (⏮ en pista 0) crasheaba el
+    restore — guardas en save/load + ⏮@0 reinicia la pista. Prefs de prueba
+    restauradas a defaults y `track_state.json` de prueba eliminada.
+17. **Sprint 10 — Playlists + Visualización del player (2026-10-22)** ✅: listas
+    guardadas end-to-end — `PlaylistNames` (puro `:core:audio`, sanitize +
+    unique con sufijo libre mínimo, 5 tests → **102/102**), `PlaylistStore`
+    (un JSON por lista en `filesDir/playlists/` con snapshot del MediaTrack
+    + `at`; dedupe por uri), fila "Añadir a Playlist" en el ctx menu con
+    `AddToPlaylistSheet` (listas existentes + "Nueva playlist" vía
+    **AlertDialog M3** — el botón inline bajo el IME era inerte en MIUI),
+    tarjeta 🔖 Playlists en Biblioteca, `PlaylistsScreen` (contado + crear)
+    y `PlaylistScreen` (▶ Reproducir / ✏ Renombrar / 🗑 Eliminar + filas
+    tap=playTracks / long-press=ctx / 🗑 quita pista). Playlists incluidas
+    en Export/Import. Visualización del player (bloque 14 núcleo): toggle
+    📊 en la cabecera, estilo Classic/Rounded, opacidad del panel (alfa 1:1,
+    def. 60) y **Equalizer Screen Spectrum** bajo la curva (Disabled/
+    Classic/Rounded); `VizSettings` en prefs `viz_settings` re-leído en vivo
+    desde el poll de 50 ms (sin push de sesión) y en `BACKUP_PREFS`.
+    Fix descubierto: ⏮/⏭ de la cabecera y del mini-player tenían las
+    acciones cruzadas desde el sprint 1 — corregidos y verificados en
+    dispositivo (⏭ avanza, ⏮ vuelve, por dumpsys). Verificado end-to-end
+    (crear/añadir/dedupe/abrir/quitar pista/reproducir/renombrar/eliminar +
+    toggle/estilo/opacidad/espectro EQ; `VERIFICATION.md` §Sprint 10, con
+    screencaps paf_pl/paf_viz_on/off/classic/op17/paf_eq_viz).
+18. **Próximo — Sprint 11 (propuesto)**: bloque **18 List Memory** (por
+    lista: Sort persistente) y arranque del bloque **9 Misc**
+    (scrobbling/Android Auto si hay tiempo); alternativa: Delete/Tags en el
+    ctx menu (resto del bloque 4).
 
 6. **Paso 6 — verificación en dispositivo real (2026-10-21)** ✅ ejecutada (detalle en
    `VERIFICATION.md` §Paso 6): teléfono físico Xiaomi MIUI Android 16 arm64-v8a. Se

@@ -63,6 +63,7 @@ class DspAudioProcessor(private val appContext: Context) : BaseAudioProcessor() 
             channels = inputAudioFormat.channelCount,
             preset = PresetStore.loadCurrent(appContext),
             crossfade = xf,
+            replayGainDb = AudioSettings.rgAppliedDb(appContext),
         )
         return inputAudioFormat
     }
@@ -184,6 +185,30 @@ class DspAudioProcessor(private val appContext: Context) : BaseAudioProcessor() 
             ?.contentGainDb = preset.preampDb
         ch.processors.filterIsInstance<com.powerampfree.audio.dsp.SoftLimiter>().firstOrNull()
             ?.enabled = preset.limitOn
+    }
+
+    /**
+     * Live Replay Gain trim (sprint 7): the EQ preamp is owned by [applyPreset],
+     * this is the separate RG term so both stack independently in GainStage.
+     */
+    fun setReplayGain(db: Float) {
+        chain?.processors
+            ?.filterIsInstance<com.powerampfree.audio.dsp.GainStage>()
+            ?.firstOrNull()
+            ?.replayGainDb = db
+    }
+
+    /**
+     * Duck for a transient focus loss (block 8): lowers the GainStage volume to
+     * a fixed fraction (and restores to unity). Absolute, not multiplicative,
+     * so repeated duck/restore cycles cannot drift — safe because the user
+     * volume is not wired to GainStage yet (always unity baseline).
+     */
+    fun setDuck(on: Boolean) {
+        chain?.processors
+            ?.filterIsInstance<com.powerampfree.audio.dsp.GainStage>()
+            ?.firstOrNull()
+            ?.volumeLinear = if (on) 0.3f else 1f
     }
 }
 

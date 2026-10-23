@@ -4,6 +4,471 @@ The analyzed reference cannot run here (it is an Android binary), so
 equivalence claims are *behavioral properties* traced from REA findings to
 tests that any environment can execute:
 
+## Sprint 10 (2026-10-22): playlists + visualización del player — verificación
+
+Bloques 4/6 (Add to Playlist + pantallas de playlists) y 14 núcleo (espectro
+en el player y en el EQ). `PlaylistNames` (puro, `:core:audio`,
+`PlaylistNamesTest` 5 tests), `PlaylistStore` (app, un JSON por lista en
+`filesDir/playlists/` con snapshot del MediaTrack + `at`), `VizSettings`
+(prefs `viz_settings`), UI en `MainActivity`.
+
+### Implementado
+- **Add to Playlist** (ctx menu): fila 🔖 → `AddToPlaylistSheet` (filas de
+  listas con conteo + dedupe por uri + "＋ Nueva playlist…"). Rework sobre la
+  marcha: el botón "Crear y añadir" inline bajo el IME no procesaba MIUI taps
+  (4+ taps verificados inertes); se movió a un **AlertDialog M3** con
+  TextField (patrón probado del sort dialog).
+- **Playlists UI**: tarjeta 🔖 en la grilla de Biblioteca (junto a Carpetas;
+  Ajustes/Importar reordenadas en su propia fila), `PlaylistsScreen`
+  (contado "N listas guardadas" + "＋ Nueva" + filas "name · N pistas") y
+  `PlaylistScreen` (▶ Reproducir / ✏ Renombrar / 🗑 Eliminar + filas
+  tap=playTracks / long-press=ctx menu / 🗑 trailing quita la pista).
+- **Viz (bloque 14 núcleo)**: toggle 📊 en la cabecera del player
+  (`player_spectrum`), estilo Classic/Rounded, opacidad del panel (valor =
+  alfa de las barras; default 60), `Equalizer Screen Spectrum`
+  Disabled/Classic/Rounded bajo la curva del EQ. `SpectrumBars` relee las
+  prefs en el poll de 50 ms → efecto inmediato sin recomposición forzada ni
+  push de sesión. Sub-pantalla nueva **Ajustes → Visualización** (row que
+  antes estaba atenuada); `viz_settings` añadido a `BACKUP_PREFS` y
+  export/import de `playlists` en el backup JSON.
+- **Fix del sprint (descubierto durante el análisis del sprint 9)**: los
+  botones ⏮/⏭ de la cabecera del player y del mini-player tenían las
+  acciones cruzadas (⏮ → `CMD_SKIP_NEXT`, ⏭ → `CMD_SKIP_PREV`) desde el
+  sprint 1. Intercambiados: ⏮→`sendSkip(false)`, ⏭→`sendSkip(true)`.
+
+### Verificación en device (Xiaomi tanzanite, Android 16, `di4djffyeukjgaw4`)
+- **Playlists end-to-end**:
+  - ctx menu → "Añadir a Playlist" → sheet auto-nueva → dialog →
+    **Test10.json creado con 1 pista** (`run-as cat`: esquema completo
+    uri/title/artist/album/durationMs/albId/trk/dir/at).
+  - Segunda pista añadida tocando la fila "Test10 · 1 pistas" del sheet →
+    **2 entries** en el JSON (RecForge + Download).
+  - **Dedupe**: re-añadir la misma pista → sigue en **2** (toast "Ya estaba
+    en…"). *(toast no capturable — verificado por conteo del JSON).*
+  - Biblio → tarjeta Playlists ("1 listas guardadas") → fila "Test10 ·
+    2 pistas" → `PlaylistScreen` (screencap `paf_pl.png`: header ▶/✏/🗑 + 2
+    filas con 🗑 trailing + mini-player).
+  - 🗑 trailing de la fila 1 → JSON queda en **1 entrada** ✓ (header "1
+    pistas").
+  - **▶ Reproducir** → dumpsys `PLAYING(3)`, `description=2026-08-03
+    12h50m03s, <unknown>, RecForge` = primera pista restante ✓ (SET_QUEUE
+    desde la lista).
+  - **⏭/⏮ fix**: con la cola completa de la biblioteca (286 pistas, pista
+    actual = fila 1), header ⏭ → `description` cambió a la pista
+    siguiente ("2026-10-13-02h05m39s (1)"); ⏮ → volvió a la pista anterior
+    ("2026-10-13-02h05m39s") ✓. Ambos verificados por dumpsys.
+  - **✏ Renombrar** → dialog "Test10b" → `Test10.json` → **`Test10b.json`**
+    en disco con la pista intacta y `name:"Test10b"` ✓.
+  - **🗑 Eliminar** → confirm "Borrar" → PlaylistsScreen "**0 listas
+    guardadas**" + `files/playlists/` vacío ✓.
+- **Visualización**:
+  - Player por defecto: barras **rounded** al 60% visibles en screencap
+    (`paf_viz_on.png`).
+  - 📊 OFF: barras desaparecen (`paf_viz_off.png`) + `viz_settings.xml`
+    `player_spectrum=false` persistido ✓; re-toggle ON ✓.
+  - **Classic** (`paf_viz_classic.png`): barras rectangulares vs rounded +
+    pref `spectrum_style=classic` ✓. Restaurado a rounded.
+  - **Opacidad**: slider a 17% (`paf_viz_op17.png`: barras casi
+    translúcidas, pref `panel_opacity=17`) → restore a 60 vía slider (quedó
+    62; se dejó en el default exacto con force-stop+XML en la limpieza).
+  - **EQ spectrum** (`paf_eq_viz.png`): barras rounded en vivo bajo la curva
+    del tab EQ con mini-player. El modo **Disabled** (ocultar el espectro)
+    se verificó por build/código-path (un `if != disabled`), sin screencap
+    dedicada.
+- **Limpieza (estado de handback)**: force-stop → XML defaults
+  (`player_spectrum=true`, `spectrum_style=rounded`, `panel_opacity=60`) +
+  cola restaurada a `[A,B]` (Greatness + 7 Powerful, index 0) → relaunch.
+  Sanity final: sesión viva `PAUSED(2)`, `description=Greatness is Quiet
+  Until It Isn't…`, playlists dir `0` ✓. Nada de Test10 sobrevive. La
+  (abundante) cola de biblioteca reproducida durante las pruebas limpió los
+  contadores/stats normales (`track_state.json` conserva progreso real de
+  esas escuchas — dato de uso, no basura de test).
+
+### Notas MIUI nuevas (para próximos sprints)
+- El **AlertDialog M3** es el patrón robusto para inputs junto al IME; el
+  TextField de Compose bajo un bottom sheet también funciona pero los taps
+  sobre botones Material del sheet resultaron inertes durante todo el
+  sprint (Causa probada: texto visible en el campo era draft del IME; el
+  estado Compose no lo recibía sin foco exacto del campo).
+- Las coordenadas del propio sheet con IME abierto cambian (escribir
+  "Test10" movió el dialog hacia arriba); re-dumpear tras cada cambio de
+  teclado.
+- `input text` repetido acaba **acumulando** texto ("Test10 que no me
+  Test100"…): limpiar con N×keyevent 67 antes de reintentar (y el propio
+  campo de diálogo se autocorrigió al commit).
+- Llegó una llamada WhatsApp durante el test del EQ: overlay del sistema
+  interrumpió un screencap (no tocado; se re-encaminó el test).
+
+### Build
+`:app:assembleDebug` verde; `:core:audio:test` **102/102** (97 previos + 5
+`PlaylistNamesTest`: sanitize/colapso de espacios/blank→default/unique sin
+colisión/sufijo libre mínimo).
+
+## Sprint 9 (2026-10-22): library avanzada (progreso, stats, filtros) — verificación
+
+Bloque 11. Políticas puras `com.powerampfree.audio.library` en `:core:audio`,
+store Android `app/.../TrackStateStore.kt`, prefs `LibrarySettings.kt`
+(`library_settings`), cableado en `PlaybackService`/`LibraryLoader`, UI en
+Settings → Biblioteca.
+
+### Implementado
+- **`TrackProgressPolicy`** ("Track Duration For Per Track Progress — At
+  least: 45 min."): solo pistas ≥ umbral (slider 1–90 min, def. 45) guardan y
+  reabren en su posición recordada; toggle Store/Restore ON.
+- **`CountAsPlayedPolicy`** ("Count As Played — after playing at least: 50%"):
+  escucha contada cuando el playhead ≥ N % de la pista (def. 50 %, slider
+  1–100 %); avance natural cuenta siempre (listened == duration), pausar no
+  cuenta.
+- **`LibraryFilterPolicy`** ("Ignore Short Tracks (Notifications, etc.)" < 6
+  s): pistas ≤ 6 s fuera del rescan; video ya excluido de fuente
+  (`MediaStore.Audio`).
+- **`TrackStateStore`**: `{tracks:{uri:{pos,plays,last}}}` en
+  `filesDir/track_state.json`, cache + rewrite atómico tmp→rename; API
+  `positionFor/saveProgress/commitCount/statsSummary/resetStats/snapshotJson/
+  importAll`.
+- **`PlaybackService`**: `commitTrackState()` en skip/dual-seam
+  (finishFade)/END/jump; snapshot de progreso en pausa y en el ticker de 15 s;
+  `restorePositionFor()` en `playCurrentItem` (⏮/jump/SET_QUEUE — el arranque
+  sin posición explícita reanuda si la política lo pide) y en el arranque de
+  SET_QUEUE single-mode. Stats solo en avances; la pausa guarda posición sin
+  contar.
+- **`LibraryLoader`**: filtro de cortas aplicado en el query con
+  `LibrarySettings.ignoreShort`.
+- **UI Settings → Biblioteca**: rescan + Per Track Progress (toggle, umbral
+  1–90), Count as played (umbral 1–100 %), Filtros (ignorar cortas), stats
+  (N pistas · N escuchas totales) y **Reset stats** (conteos a 0, posiciones
+  conservadas). `library_settings` en `BACKUP_PREFS`; export/import incluye
+  sección `trackState` (solo entradas vivas).
+
+### Defectos corregidos durante esta fase
+- **`queue.json` con `index:-1` crasheaba el servicio en el restore**
+  (`IndexOutOfBoundsException: index: -1, size: 2` en `restoreQueue`): el
+  flujo preexistente de ⏮ en la primera pista hacía `queueIndex=-1` y un
+  snapshot posterior persistía ese -1. Guardas en los tres puntos:
+  `restoreQueue` (índice fuera de rango → aborta sin crash),
+  `QueueStore.save` (no persiste índices corruptos) y `saveQueueSnapshot`
+  dual. Semántica nueva para ⏮@0 en dual: reinicia la pista actual (nunca
+  -1). Evidencia: el boot con el queue corrupto ya no crashea y el guard
+  deja la sesión viva (state NONE → rescan/SET_QUEUE re-arma).
+- Lectura del `positionMs` del track saliente en pausa/crossfade: el commit
+  usa `primary.player.currentPosition` DE QUE el track siga siendo el item
+  actual (llamadas ubicadas antes de cualquier cambio de beam).
+
+### Verificación en dispositivo (evidencia)
+- **Count-as-played**: SET_QUEUE de búsqueda y avances → cada transición con
+  playhead ≥ umbral sumó plays (21 escuchas totales visibles en settings =
+  la suma del file). Pausa: posición guardada exacta (184 669 ms = posición
+  de pausa) **sin** incrementar plays.
+- **Restore per-track**: (1) SET_QUEUE reabrió B en su posición recordada
+  **exacta 29 864 ms**; (2) tap en Cola (queueJump) reabrió A en **99 921
+  ms** (dumpsys 105.9 s = 99.9 + tiempo transcurrido). Con la app
+  detenida/relanzada el arranque restauró la cola en pausa (sin autoplay).
+- **Filtros**: con "Ignorar pistas cortas" ON el rescan devuelve **286
+  pistas** (antes 288) — las 2 pistas < 6 s del sistema quedaron fuera.
+- **Settings**: línea "2 pistas reproducidas · 21 escuchas totales" →
+  **Reset stats** → nota "Estadísticas reiniciadas (posiciones por pista
+  conservadas)" + "0 pistas · 0 escuchas" + file con plays=0/last=0 y
+  posiciones intactas (paf_libset.png).
+- **Tests finales**: `:core:audio` **97/97** (85 + 12 `LibraryPoliciesTest`),
+  `:app:assembleDebug` verde; prefs de prueba (1 min / 1 %) restauradas a
+  defaults (45 min / 50 %) y `track_state.json` de prueba eliminada tras la
+  verificación.
+
+### Limitaciones honestas
+- Music Folders (selección de carpetas), Full Rescan con limpieza de tags,
+  File Access Legacy Mode y las sub-pantallas Lists/Search/Queue/Playlists/
+  Shuffle/Scanner del catálogo no implementadas; progreso configurable por
+  lista/carpeta individual pendiente; los botones ±10 s permanecen siempre
+  visibles (sin el modo "Pro Buttons" de pistas largas); restore aplicado en
+  aperturas (SET_QUEUE/jump/⏮), el avance natural dentro de la cola entra
+  desde 0 (semántica de reproducción secuencial).
+- La verificación de skip se hizo con los propios botones ⏭/⏮/Cola y
+  teclas de sistema; los taps de MIUI resultaron intermitentes (patrón
+  conocido) y se registró el desorden de eventos observado vía file
+  (plays/plays duplicados) sin afectar la corrección del commit.
+
+### Cobertura
+- `core.audio.library.LibraryPoliciesTest` — 12 tests (progreso umbral,
+  toggle, count porcentual con límites, extremo natural, filtros cortas y
+  bordes). Total `:core:audio`: **97/97**.
+
+## Sprint 8 (2026-10-22): carátulas + fondo derivado — verificación
+
+Bloques 12 + 13. Lógica pura `com.powerampfree.audio.art.CoverFileNames`,
+loader Android `app/.../AlbumArtLoader.kt`, settings `ArtSettings.kt`
+(`art_settings`), tile/fondo en `MainActivity`, `artworkUri` en `LibraryLoader`.
+
+### Implementado
+- **`CoverFileNames`**: candidatos canónicos en orden de prioridad
+  (`cover > albumart > album_art > folder > front` × `jpg > jpeg > png`),
+  `pick(lowercase)` y `isCoverLower`. 6 tests `:core:audio`.
+- **`AlbumArtLoader`**: (1) proveedor albumart del sistema por `albumId`
+  (`content://media/external/audio/albumart/<id>`, uri que también viaja en la
+  metadata); (2) fallback scan de carátulas en la carpeta de la pista — padre
+  derivado del file: uri, o `DATA`/`RELATIVE_PATH` consultado por `ALBUM_ID`;
+  (3) SAF árbol sin ruta local → null (glifo honesto). Decode dos pasadas con
+  `inSampleSize`; cache `LruCache` **por bytes (32 MiB)** con `sizeOf =
+  allocationByteCount` (los tiles de 1024 px ≈ 4 MiB → el cap de entradas era
+  insuficiente). `high_res_art` (def. ON) limita el decode del tile a 1024 px
+  vs 512 px.
+- **Metadata con art**: `toMediaItem()` pone `setArtworkUri(artUri(albumId))`
+  cuando `albumId >= 0` → la tarjeta de medios del sistema (lock screen,
+  Bluetooth, casting) recibe la carátula; `high_res_art` en este diseño limita
+  el decode propio de la UI (el bitmap grande se envía vía uri canónica del
+  sistema, no se serializa a mano).
+- **UI**: fila propia de carátula 160 dp bajo la cabecera del player
+  (`AlbumArtImage` con claves remember albumId+uri y decode en IO),
+  mini-player 44 dp; fondo del player (bloque 13) = carátula Crop + scrim
+  gradiente vertical (alpha = 0.25 + 0.6×gradiente/10) con `Modifier.blur`
+  (radio valor×6 dp, API 31+); blur=0 → decode **1024 px** para nitidez
+  (el upscale de 256 px se veía borroso igualmente); Settings → **Album Art**
+  con toggle alta resolución, mantener proporción, diagnóstico de pista
+  (albumId/carpeta + n/i del bus) y Borrar cache. `art_settings` (plain
+  boolean/int) en `BACKUP_PREFS`.
+
+### Defectos corregidos durante esta fase
+- **`QueueStore` no persistía `albId`/`dir`/`trk`** (advertencia crítica
+  `.doc` y descubierta en runtime): tras un restore, TODAS las pistas del
+  queue tenían `albumId=-1` → art lookup imposible y diagnóstico de settings
+  mostraba `albumId=-1 carpeta=—` con el bus poblado (`n=288 i=7 id-1`, sonda
+  temporal en el campo artist). Round-trip save/load corregido (mismas claves
+  que `MediaTrack`: `albId`, `dir`, `trk`); el queue re-se-guarda con albId ya
+  (evidencia: `queue.json` con `"albId":7441874997196160190,"dir":"Music/` +
+  `Rohn Audio/"` tras un `SET_QUEUE` nuevo).
+- **Layout roto del header del player**: como la carátula se anidó en una
+  Row(weight) dentro de la Row del header DENTRO del nuevo Box del fondo, el
+  dump mostraba dispersión vertical imposible (título @144, botones @574,
+  controles @1138) y no había tile pintado. Lección: NO anidar cadenas de
+  weight en Rows dentro de la reestructuración Box; carátula en **fila
+  propia** centrada y header restaurado al baseline exacto → dump normal
+  (header y206, tile centrado 505-671, controles y827).
+- **Cache por entradas**: `LruCache(48)` con tiles de hasta 4 MiB podía
+  exceder 190 MiB; cambiado a límite por **bytes** (32 MiB).
+
+### Verificación en dispositivo (evidencia)
+- **Tile + fondo con art real**: cover de prueba generada (gradiente PA,
+  512×512 jpeg) y `push` a `Music/Rohn Audio/cover.jpg` → tile 160 dp con la
+  art + **fondo con blur** (fantasma PA desenfocado moderno vía blur) y
+  scrim; portada también en el **mini-player** (44 dp). Con `blur=0` el fondo
+  es nítido (decode 1024 px) — comparativa de capas paf_shot10/11/12.png.
+- **Slider operativos**: swipe en el slider Desenfoque 5→0 cambia el valor en
+  pantalla (`Desenfoque de fondo: 0`) y persiste (`art_settings.xml`
+  `bg_blur=0` vía `run-as`); restaurado a 5 (default).
+- **Tarjeta de medios del sistema**: `cmd statusbar expand-notifications` →
+  tarjeta con miniatura PA + título + controles + badge cast (la metadata de
+  la sesión incluye artwork); `dumpsys media_session`
+  `metadata: size=11` para el track.
+- **Fallbacks honestos**: con las carpetas SIN carátula (único contenido real
+  del dispositivo: mp3+lrc y grabaciones opus) el tile muestra el glifo 🎵 —
+  confirmación de que el sistema no sirve art para esos álbumes y de que el
+  glifo es el estado legítimo. La carátula de prueba se **eliminó** tras la
+  verificación (`rm cover.jpg`; el art vuelve al glifo).
+- **Tests finales**: `:core:audio` **85/85** (79 + 6 `CoverFileNamesTest`),
+  `:app:assembleDebug` verde; APK final instalada
+  (`lastUpdateTime=20:55` serie de reinstalas de verificación).
+
+### Limitaciones honestas
+- Sin descarga por red (no faucets); sin imágenes de artista; carátulas de
+  fila en listas/cabeceras pendientes; List/Lyrics background pendiente
+  (bloque 13 parcial); API Compatibility/24-bit/Increase Resolution no
+  implementados; el toggle alta resolución solo controla el decode propio de
+  la UI (el resto de consumidores usa la uri canónica del sistema).
+- Verificación de lock screen card propia no posible (MIUI no la muestra); se
+  validó la vía equivalente (tarjeta de medios del sistema en la shade).
+
+### Cobertura
+- `core.audio.art.CoverFileNames` — 6 tests (prioridad, dedupe, case, null,
+  isCover). Total `:core:audio`: **85/85**.
+
+## Sprint 7 (2026-10-22): ajustes de audio y headset — verificación
+
+Bloques 8 + 10 del catálogo. Lógica pura en `:core:audio`
+(`com.powerampfree.audio.input.HeadsetGestures`,
+`com.powerampfree.audio.focus.FocusPolicy`), cableado en `PlaybackService`,
+UI en `MainActivity`.
+
+### Implementado
+- **`HeadsetGestures`** (máquina de estados sin reloj; el caller arma timers y
+  les alimenta expiraciones): down→cuenta click (solo `repeatCount==0`), up→
+  ventana doble 350 ms, long 700 ms consume el click y emite `LONG_NEXT`,
+  resolve 1/2/3 clicks → `SINGLE`/`DOUBLE_NEXT`/`TRIPLE_PREV`. 10 tests con
+  timestamps sintéticos.
+- **`FocusPolicy`**: tabla de decisión pura evento→acción respetando
+  `FocusToggles(pause, resume, duck)`; GAIN restaura duck antes que resume;
+  LOSS_TRANSIENT_CAN_DUCK prefiere duck. 12 tests.
+- **`PlaybackService`**: `AudioFocusRequest` (USAGE_MEDIA/CONTENT_TYPE_MUSIC,
+  `setWillPauseWhenDucked(false)`) gestionado por el servicio;
+  `ExoBeam(withFocus=false)` para que ExoPlayer NO pida foco por su cuenta
+  (`handleAudioFocus` de media3 ya no interfiere). `ensureAudioFocus()` al
+  pasar a playing, `abandonAudioFocus()` al pausar solo si `!focusPaused`;
+  LOSS permanente baja `haveFocus` (re-request al siguiente play). Duck =
+  `GainStage.volumeLinear` absoluto 0.3/1.0 (baseline siempre 1.0).
+- **Media buttons**: `onMediaButtonEvent` devuelve true (swallow) cuando
+  `respond_to_buttons=false`; HEADSETHOOK alimenta `HeadsetGestures`
+  (timers `gestureResolve`/`gestureLong`); MEDIA_PLAY/PAUSE/PLAY_PAUSE y
+  NEXT/PREV mapean a engine/skip. Pulsación simple = acción configurada por
+  conexión (Jack preferido si ambos conectados, documentado porque el
+  KeyEvent no trae source).
+- **Receptores**: ACTION_AUDIO_BECOMING_NOISY → pausa si
+  `pause_on_disconnect`; ACTION_HEADSET_PLUG sticky sembrado con guard
+  `plugInitialized` (la primera entrega NO dispara resume); A2DP
+  connection state → `btConnected` + resume si `resume_on_bluetooth`.
+- **Replay Gain**: `GainStage` + param `replayGainDb` (última posición del
+  constructor para no romper llamadas posicionales), `DspChain.buildDefault`
+  lo pasa al preamp como trim aditivo; `CMD_SET_REPLAY_GAIN` en `onConnect`
+  + handler → `applyReplayGain()` (primary + overlay). `AudioSettings`
+  (prefs `audio_settings`; lector numérico tolerante Int/Long/Double/Number
+  por la lección org.json del import). UI: Settings → Audio y
+  Headset/Bluetooth; `sendReplayGain()` persiste y empuja el trim en vivo;
+  `audio_settings` añadido a `BACKUP_PREFS` e import re-aplica el RG.
+- **RG aplicado a la cadena**: `DspAudioProcessor.onConfigure` pasa
+  `AudioSettings.rgAppliedDb()` a `buildDefault` (+3 tests: trims, stack con
+  preamp, wiring de buildDefault).
+
+### Defectos corregidos durante esta fase
+- **Compile**: `IntentFilter` sin import en `PlaybackService` (únicos
+  errores de la pasada Kotlin; resto compiló a la primera).
+- **org.json narrowing** (lección del sprint 5, precargada en diseño):
+  `rg_pregain_db` se lee con `num()` tolerante y el import mapea
+  Double→`putFloat`.
+
+### Verificación en dispositivo (evidencia)
+- **Foco (dumpsys audio)**: mientras reproduce, el stack de foco tiene arriba
+  `pack: com.powerampfree.player -- client:
+  ...PlaybackService$$ExternalSyntheticLambda1 -- gain: GAIN -- loss: none`
+  con `usage=USAGE_MEDIA content=CONTENT_TYPE_MUSIC` — el listener propio del
+  servicio (no el de media3) sostiene el foco ✓. Los logs de
+  `requestAudioFocus` con `clientId=...x media3.exoplayer.AudioFocusManager`
+  son de builds anteriores (hoy `buildBeam(withFocus=false)`).
+- **Settings**: filas Audio y Headset/Bluetooth habilitadas; ambas
+  sub-pantallas renderizan (dumps `uiautomator`): 3 switches de focus,
+  sección Replay Gain con Pista ✓/Álbum y slider Pregain ±12 dB; Headset con
+  3 toggles de conexión, Responder a botones, pills ⏯/⏭/⏮ por conexión.
+- **Persistencia** (`run-as ... cat shared_prefs/audio_settings.xml`):
+  toggles de focus y RG escriben al instante (`rg_enabled=true`,
+  `focus_resume=false`…); `wired_action` cambia con la pill (`next` →
+  `play_pause`); reactivado todo a default al cierre (solo
+  `wired_action=play_pause` explícito).
+- **Pulsación simple** (`input keyevent 79`): con `wired_action=next` el
+  track saltó 2026-…-02h05m39s → Greatness is Quiet… ✓; con
+  `wired_action=play_pause` pausa/reanuda — dumps intermedios captaron
+  `BUFFERING(6)` del re-buffer tras reanudar; PLAYING final en la MISMA
+  posición (18 142 → 18 667 ms) ✓.
+- **Toggle directo** (`input keyevent 85`): PLAYING → PAUSED(2) speed=0.0 →
+  PLAYING reanudando en la posición exacta (18 142 → 18 160 ms) ✓.
+- **Swallow**: con `respond_to_buttons=false`, keyevent 85 y 79 no cambian el
+  estado (PLAYING→PLAYING, posición avanzando 39.7→42.7 s normal) ✓;
+  reactivado después.
+- **Persistencia de foco**: al cerrar sesiones previas el stack mostró
+  `focus owner ... event: died` limpio (sin foco huérfano).
+
+### Limitaciones honestas
+- Pérdida de foco real (llamada, A2DP por otra app, nav prompt) no simulable
+  aquí: cubierto por 12 tests de la tabla de decisión + código de
+  `handleFocusChange()`; verificación en hardware real queda pendiente.
+- Ratios de simultáneos (wired+BT) no generados con dongles reales:
+  `wiredConnected`/`btConnected` se prueban por receptores y lógica.
+- Pregain actúa como trim global (tags por pista pendientes); el trim se
+  persiste y se re-aplica en vivo — sin medición audible hecha (unit-tests
+  del stack de gain sí cubren la aritmética).
+
+### Cobertura
+- `:core:audio` **79/79** verde (FocusPolicyTest 12, HeadsetGesturesTest 10,
+  ChainAndPresetTest +3 → 12; Biquad 6, Crossfade 9, ParamEq 7, Spectrum 6,
+  AutoAdvance 6, Lrc 5, ShuffleOps 6); `:app:assembleDebug` verde; APK
+  instalado + verificado en `di4djffyeukjgaw4`.
+
+---
+
+## Sprint 6 (2026-10-22): menú contextual de pista + letras LRC — verificación
+
+Bloques 4 + 5 del catálogo. Implementación original (comportamiento de la
+referencia solo como objetivo). Evidencia por dumps `uiautomator`, `dumpsys
+media_session` y análisis de píxeles (MIUI suprime nuestros `Log.i`).
+
+### Implementado
+- **`TrackContextMenu`** (hoja inferior: scrim + `Column` alineada abajo,
+  renderizada DENTRO del content Box de `PafApp` — ver defecto estructural
+  abajo). Cabecera: título/artista/álbum, `dur · ext` (extLabel) y 👍/👎 de
+  rating rápido. Acciones: ▶ Reproducir ahora / ⏭ Ecolar siguiente / ⤓
+  Ecolar al final de la cola / 🎤 Ir a: \<artista\> / 💿 Ir a: \<álbum\> /
+  📁 Ir a: carpeta / 📝 Letras. Filas artista/álbum solo si el campo no está
+  en blanco (etiqueta = nombre real). Long-press (`combinedClickable`) en
+  QueueTab, TrackListView, FolderScreen y SearchTab.
+- **`CMD_ENQUEUE_NEXT`** (`com.powerampfree.player.ENQUEUE_NEXT`, extra
+  `EXTRA_ENQUEUE_END`): `enqueueTracks()` inserta tras el índice actual (dual)
+  o tras `QueueBus.index` (nativo) SIN interrumpir la reproducción; registrado
+  en `onConnect` como session command.
+- **Navegación cross-tab**: `NavRequest(kind 0/1/2 = artista/álbum/carpeta,
+  key, albumId)` viaja en el estado `gotoNav` de `PafApp`; `LibraryTab` lo
+  consume con `LaunchedEffect` (pone `GroupRow` de detalle o `folderPath`) y
+  salta al tab Biblioteca.
+- **Letras**: `LrcParser` puro Kotlin en `:core:audio`
+  (`com.powerampfree.audio.lrc`, `LrcLine`/`activeIndex`, 5 tests). Resolución
+  `findLyrics()` (app): 1) ruta `file:`/`DATA` de MediaStore → hermano `.lrc`
+  con lectura `File`; 2) query MediaStore Files (`DISPLAY_NAME` +
+  `RELATIVE_PATH`) → `openInputStream` vía `ContentUris` (árboles SAF no
+  siguen). `LyricsScreen` overlay opaco: cabecera (marquee título, artista ·
+  dur · ext, sufijo "(no es la pista actual)"), pos muestreada 200 ms si es la
+  pista actual, línea activa = última `atMs <= posMs` (negrita), tap →
+  `seekTo(line.atMs)`, follow con botón ⏯ Seguir (flag `pendingAuto` protege
+  el auto-scroll programático del watcher `isScrollInProgress`), estado vacío
+  "Sin letras / No hay archivo .lrc junto a esta pista."
+
+### Defectos corregidos durante esta fase
+- **Overlays touch-inert por estructura hermana**: `TrackContextMenu`,
+  `LyricsScreen` y `SettingsScreen` se llamaban como composable HERMANOS tras
+  el `Column` raíz de `PafApp` (fuera de un nodo de layout) — se dibujaban
+  pero los taps caían muertos (los clicks ejecutaban según prefs pero sin
+  recomposición; ← y BACK no cerraban). Fix: moverlos DENTRO del content Box
+  (`weight(1f)`, patrón ya probado). Cada overlay además lleva su propio
+  `BackHandler` interno (el más interno gana): `TrackContextMenu { onDismiss() }`,
+  `LyricsScreen { onClose() }`. ← y BACK cierran la letra correctamente.
+- **Estado vacío de letras**: `findLyrics(...) ?: emptyList()` para que la UI
+  salga de "Buscando letras…" y pinte "Sin letras" cuando no hay `.lrc`.
+- **Follow de auto-scroll**: dos iteraciones previas rechazadas — (a) check
+  por rango de visibilidad (dispara ANTES del auto-scroll y entra en deadlock
+  vía follow=false) y (b) watcher de scroll plano (cancela el scroll
+  programático). Solución final: flag `pendingAuto` activa mientras corre
+  `animateScrollToItem`.
+
+### Verificación en dispositivo (evidencia)
+- **Menú contextual** abre con long-press en las 4 listas; todas las filas
+  renderizan. Tras el fix intra-Box las coordenadas se recolocaron (filas
+  y≈1203-1905 según nº de acciones).
+- **Reproducir ahora**: en la pista stale `u7LzddOa….flac` (entrada de
+  MediaStore cuyo archivo YA NO existe en disco, `owner=com.maxmpz.equalizer`)
+  → `state=ERROR(7) error=Source error` y `metadata description=u7LzddOa…` —
+  el comando SÍ cambió a la pista tocada y ExoPlayer falló solo porque el
+  archivo falta (comportamiento correcto, no un bug). En un archivo real
+  (`2026-10-13-02h05m39s.mp3` de Download) → **`PLAYING(3)`** con
+  `metadata = 2026-10-13-02h05m39s, <unknown>, Download`, `error=null`.
+- **Ir a: artista** (pista Conversation, artista "Jordi") → saltó al detalle
+  de artista: cabecera `Jordi · 34 pistas` y la lista completa de las 34
+  pistas Conversation ✓.
+- **Encolar siguiente**: cola 41→42, insertada tras el índice actual (sin
+  interrumpir). **Encolar al final**: 42→43.
+- **Letras**: renderiza el `.lrc` real de "The Honest Truth About Motivation"
+  (`/sdcard/Music/Rohn Audio/`, primera línea `[00:02.080]There is a
+  difference between desire and…`); auto-scroll sigue la línea activa hasta
+  hondo del archivo; resaltado verificado por análisis de píxel (fila activa
+  max=227 + 300-863 px brillantes >200 vs max=145/0 en las demás; tool
+  `tools\analyze-rows.ps1`). **Tap-seek** re-centra y mueve el resaltado
+  (verificado en dos capturas). Estado "Sin letras" renderiza para una pista
+  sin `.lrc`. BACK y ← cierran la letra (tras el fix estructural).
+- **Rating** 👍 persiste en `track_ratings.xml` (uri `…media/63331`
+  `value="1"`).
+- La pista stale en el menú contextual NO muestra filas de artista/álbum (su
+  artist/album están en blanco) — solo Ir a: carpeta + Letras; las pistas con
+  metadata muestran Ir a: \<artista\> e Ir a: \<álbum\> con el nombre real.
+
+### Cobertura
+- `:core:audio` **54/54** verde (+5: `LrcParserTest`); `:app:assembleDebug`
+  verde; APK instalado y verificado en el dispositivo (serial
+  `di4djffyeukjgaw4`); playback pausado y app force-stopped al cierre.
+
+---
+
 ## Sprint 1 (2026-10-22): player screen completo — verificación
 
 Bloque 1 del catálogo (`POWERAMP_FEATURES.md`). Implementación original

@@ -126,4 +126,31 @@ class ChainAndPresetTest {
         g.volumeLinear = 0f
         assertEquals(0f, g.effectiveGainLinear(), 1e-5f, "volume=0 must give near-silence")
     }
+
+    @Test
+    fun `replay gain trims level on top of preamp`() {
+        val flat = GainStage(44100)
+        val withRg = GainStage(44100, contentGainDb = 0f, replayGainDb = -6f)
+        val ratio = withRg.effectiveGainLinear() / flat.effectiveGainLinear()
+        // -6 dB ⇒ amplitude ratio 10^(-6/20) ≈ 0.501.
+        assertEquals(0.5011872f, ratio, 1e-4f, "replay gain -6 dB halves amplitude")
+    }
+
+    @Test
+    fun `replay gain stacks additively with the eq preamp`() {
+        val preampOnly = GainStage(44100, contentGainDb = 6f)
+        val both = GainStage(44100, contentGainDb = 6f, replayGainDb = -3f)
+        // +6 preamp then -3 replay gain ⇒ net +3 dB vs preamp alone.
+        val ratio = both.effectiveGainLinear() / preampOnly.effectiveGainLinear()
+        assertEquals(0.7079458f, ratio, 1e-4f, "net +6-3 = +3 dB ⇒ ≈0.708")
+    }
+
+    @Test
+    fun `buildDefault wires replay gain into the chain`() {
+        val preset = EqPreset("Flat", 0f, listOf())
+        val chain = DspChain.buildDefault(44100, 2, preset, replayGainDb = -6f)
+        val gain = chain.processors.filterIsInstance<GainStage>().first()
+        val ratio = gain.effectiveGainLinear() / GainStage(44100).effectiveGainLinear()
+        assertEquals(0.5011872f, ratio, 1e-4f, "chain carries the replay-gain trim")
+    }
 }

@@ -18,6 +18,8 @@ class GainStage(
     var contentGainDb: Float = 0f,
     var volumeLinear: Float = 1f,
     val volumeCurvePower: Double = 2.0,
+    /** Replay Gain trim (sprint 7): added on top of the EQ preamp. */
+    var replayGainDb: Float = 0f,
 ) : AudioProcessor {
 
     private var lastGain = Float.MIN_VALUE
@@ -25,7 +27,7 @@ class GainStage(
     private fun currentGainLinear(): Float {
         val v = volumeLinear.coerceIn(0f, 1f).toDouble()
         val mapped = v.pow(volumeCurvePower)
-        val totalDb = contentGainDb + 20.0 * kotlin.math.log10(mapped + 1e-20)
+        val totalDb = contentGainDb + replayGainDb + 20.0 * kotlin.math.log10(mapped + 1e-20)
         return 10.0.pow(totalDb / 20.0).toFloat().also { lastGain = it }
     }
 

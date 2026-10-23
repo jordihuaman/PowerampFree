@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.size
@@ -69,19 +70,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import java.io.File
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import androidx.core.content.ContextCompat
 import androidx.media3.common.C
@@ -256,6 +261,7 @@ class MainActivity : ComponentActivity() {
         var ctxIndex by remember { mutableStateOf(0) }
         var gotoNav by remember { mutableStateOf<NavRequest?>(null) }
         var lyricsTrack by remember { mutableStateOf<MediaTrack?>(null) }
+        var plTrack by remember { mutableStateOf<MediaTrack?>(null) }
         val openCtx: OpenCtx = { t, l, i ->
             ctxTrack = t
             ctxList = l
@@ -369,6 +375,16 @@ class MainActivity : ComponentActivity() {
                                 lyricsTrack = t
                                 ctxTrack = null
                             },
+                            onAddToPlaylist = {
+                                plTrack = t
+                                ctxTrack = null
+                            },
+                        )
+                    }
+                    plTrack?.let { t ->
+                        AddToPlaylistSheet(
+                            track = t,
+                            onClose = { plTrack = null },
                         )
                     }
                     lyricsTrack?.let { t ->
@@ -401,6 +417,7 @@ class MainActivity : ComponentActivity() {
                         AppearanceStore.setStartAtLibrary(this@MainActivity, it)
                     },
                     onClose = { settingsOpen = false },
+                    currentSnapshot = snap,
                     )
                     }
                     }
@@ -421,6 +438,101 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ------------------------------ album art + background (sprint 8)
+
+    /**
+     * Art tile resolved from [PlayerSnapshot] cues (MediaStore albumart
+     * provider → sibling cover files); generic glyph when nothing found.
+     */
+    @Composable
+    private fun AlbumArtImage(snap: PlayerSnapshot, px: Int, modifier: Modifier) {
+        var bmp by remember(snap.albumId, snap.uri) {
+            mutableStateOf<android.graphics.Bitmap?>(null)
+        }
+        androidx.compose.runtime.LaunchedEffect(snap.albumId, snap.uri) {
+            val cap = if (ArtSettings.highResArt(this@MainActivity)) 1024 else 512
+            bmp = withContext(Dispatchers.IO) {
+                AlbumArtLoader.load(
+                    this@MainActivity, snap.albumId, snap.uri, snap.folder, minOf(px, cap),
+                )
+            }
+        }
+        val b = bmp
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (b != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = b.asImageBitmap(),
+                    contentDescription = "Carátula",
+                    contentScale = if (ArtSettings.keepAspect(this@MainActivity)) {
+                        ContentScale.Fit
+                    } else {
+                        ContentScale.Crop
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text("🎵", style = MaterialTheme.typography.titleLarge)
+            }
+        }
+    }
+
+    /**
+     * Block 13: art-derived player background — blurred art + bottom gradient.
+     * Plain surface when disabled or no art (no decorative fake gradients).
+     */
+    @Composable
+    private fun PlayerBackground(snap: PlayerSnapshot, modifier: Modifier) {
+        if (!ArtSettings.bgEnabled(this@MainActivity)) {
+            Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
+            return
+        }
+        var bmp by remember(snap.albumId, snap.uri) {
+            mutableStateOf<android.graphics.Bitmap?>(null)
+        }
+        androidx.compose.runtime.LaunchedEffect(snap.albumId, snap.uri) {
+            // Sharp art when the blur slider is 0 (256px upscale would look
+            // blurry anyway); small decode for the blurred path.
+            val b = ArtSettings.bgBlur(this@MainActivity)
+            bmp = withContext(Dispatchers.IO) {
+                AlbumArtLoader.load(
+                    this@MainActivity, snap.albumId, snap.uri, snap.folder,
+                    if (b == 0) 1024 else 256,
+                )
+            }
+        }
+        val gradient = ArtSettings.bgGradient(this@MainActivity) / 10f
+        if (bmp == null) {
+            Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
+            return
+        }
+        val scrim = Modifier.fillMaxSize().background(
+            androidx.compose.ui.graphics.Brush.verticalGradient(
+                0f to androidx.compose.ui.graphics.Color.Transparent,
+                1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.25f + 0.6f * gradient),
+            ),
+        )
+        val blur = ArtSettings.bgBlur(this@MainActivity)
+        val base = Modifier.fillMaxSize()
+        Box(modifier.fillMaxSize()) {
+            androidx.compose.foundation.Image(
+                bitmap = bmp!!.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = if (android.os.Build.VERSION.SDK_INT >= 31 && blur > 0) {
+                    base.blur((blur * 6).dp)
+                } else {
+                    base
+                },
+            )
+            Box(scrim)
+        }
+    }
+
     // -------------------------------------------------------- mini player
 
     @OptIn(ExperimentalFoundationApi::class)
@@ -434,6 +546,12 @@ class MainActivity : ComponentActivity() {
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                AlbumArtImage(
+                    snap = snap,
+                    px = 48,
+                    modifier = Modifier.size(44.dp),
+                )
+                Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         snap.title,
@@ -453,7 +571,7 @@ class MainActivity : ComponentActivity() {
                 androidx.compose.material3.TextButton(onClick = { togglePlayPause() }) {
                     Text(if (snap.isPlaying) "⏸" else "▶")
                 }
-                androidx.compose.material3.TextButton(onClick = { sendSkip(false) }) { Text("⏭") }
+                androidx.compose.material3.TextButton(onClick = { sendSkip(true) }) { Text("⏭") }
             }
         }
     }
@@ -472,6 +590,7 @@ class MainActivity : ComponentActivity() {
         var sleepEndMs by remember { mutableStateOf(0L) }
         var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
         var showSleep by remember { mutableStateOf(false) }
+        var vizOn by remember { mutableStateOf(VizSettings.playerSpectrum(this)) }
 
         // sleep timer countdown → auto pause
         androidx.compose.runtime.LaunchedEffect(sleepEndMs) {
@@ -486,7 +605,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            PlayerBackground(snap, Modifier)
+            Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -509,10 +630,30 @@ class MainActivity : ComponentActivity() {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     androidx.compose.material3.TextButton(onClick = onSettings) { Text("⚙") }
                     androidx.compose.material3.TextButton(onClick = onLyrics) { Text("📝") }
-                    androidx.compose.material3.TextButton(onClick = { sendSkip(true) }) { Text("⏮") }
+                    // Block 14: bars button toggles the on-player visualization.
+                    androidx.compose.material3.TextButton(onClick = {
+                        val on = !vizOn
+                        vizOn = on
+                        VizSettings.setPlayerSpectrum(this@MainActivity, on)
+                    }) {
+                        Text(
+                            "📊",
+                            color = if (vizOn) Color(0xFF39A7E4) else LocalContentColor.current,
+                        )
+                    }
+                    androidx.compose.material3.TextButton(onClick = { sendSkip(false) }) { Text("⏮") }
                     Button(onClick = { togglePlayPause() }) { Text(if (isPlaying) "⏸" else "▶") }
-                    androidx.compose.material3.TextButton(onClick = { sendSkip(false) }) { Text("⏭") }
+                    androidx.compose.material3.TextButton(onClick = { sendSkip(true) }) { Text("⏭") }
                 }
+            }
+            // art tile row (sprint 8): own row, no nested weight chains
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                AlbumArtImage(snap = snap, px = 512, modifier = Modifier.size(160.dp))
             }
             // ---- controls row: shuffle / repeat / sleep / ±10 s / rating
             Row(
@@ -566,7 +707,8 @@ class MainActivity : ComponentActivity() {
                     Text("👎", color = if (rated == -1) Color(0xFFE4394E) else LocalContentColor.current)
                 }
             }
-            SpectrumBars(isPlaying = isPlaying)
+            if (vizOn) SpectrumBars(isPlaying = isPlaying)
+            }
         }
 
         if (showSleep) {
@@ -699,6 +841,10 @@ class MainActivity : ComponentActivity() {
                     }
                     Spacer(Modifier.height(4.dp))
                     EqCurve(updatingPreset)
+                    // Block 14: "Equalizer Screen Spectrum" (Disabled/Classic/Rounded).
+                    if (VizSettings.eqSpectrum(this@MainActivity) != VizSettings.EQ_DISABLED) {
+                        SpectrumBars(isPlaying = controller?.isPlaying == true)
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Switch(
                             checked = updatingPreset.graphicOn,
@@ -880,7 +1026,7 @@ class MainActivity : ComponentActivity() {
         val tracks: List<MediaTrack>,
     )
 
-    private enum class LibTop { ROOT, SONGS, ALBUMS, ARTISTS, GENRES, FOLDERS }
+    private enum class LibTop { ROOT, SONGS, ALBUMS, ARTISTS, GENRES, FOLDERS, PLAYLISTS }
 
     /** Sort options for the folder explorer (List Options). */
     private enum class ListSort(val label: String) {
@@ -931,10 +1077,15 @@ class MainActivity : ComponentActivity() {
         var top by remember { mutableStateOf(LibTop.ROOT) }
         var detail by remember { mutableStateOf<GroupRow?>(null) }
         var folderPath by remember { mutableStateOf<String?>(null) }
+        var plName by remember { mutableStateOf<String?>(null) }
 
-        BackHandler(enabled = detail != null || folderPath != null || top != LibTop.ROOT) {
+        BackHandler(
+            enabled = detail != null || folderPath != null || plName != null ||
+                top != LibTop.ROOT,
+        ) {
             when {
                 detail != null -> detail = null
+                plName != null -> plName = null
                 folderPath != null -> folderPath =
                     if (folderPath!!.isEmpty()) null else parentFolder(folderPath!!)
                 else -> top = LibTop.ROOT
@@ -993,6 +1144,12 @@ class MainActivity : ComponentActivity() {
                 folderRows(),
                 onOpen = { g -> folderPath = if (g.subtitle == "(raíz)") "" else g.subtitle },
             )
+            plName != null -> PlaylistScreen(
+                name = plName!!,
+                onOpenCtx = onOpenCtx,
+                onChange = { plName = it },
+            )
+            top == LibTop.PLAYLISTS -> PlaylistsScreen(onOpen = { plName = it })
             top == LibTop.GENRES -> GenresScreen(onOpen = { detail = it })
             else -> LibraryRoot(onOpen = { top = it }, onSettings = onSettings)
         }
@@ -1048,9 +1205,13 @@ class MainActivity : ComponentActivity() {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     CategoryCard("📁", "Carpetas", folderRows().size) { onOpen(LibTop.FOLDERS) }
-                    CategoryCard("⚙", "Ajustes", 0) { onSettings() }
+                    CategoryCard(
+                        "🔖", "Playlists",
+                        com.powerampfree.player.PlaylistStore.list(this@MainActivity).size,
+                    ) { onOpen(LibTop.PLAYLISTS) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CategoryCard("⚙", "Ajustes", 0) { onSettings() }
                     CategoryCard("📥", "Importar (SAF)", 0) { pickFolder.launch(null) }
                 }
             }
@@ -1124,6 +1285,249 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    // -------------------------------------------------- playlists (sprint 10)
+
+    /**
+     * Saved playlists hub (block 6): "name · N pistas" rows + create row.
+     * Lists live in `PlaylistStore` (filesDir/playlists); adding tracks happens
+     * from any track's long-press context menu ("Añadir a Playlist").
+     */
+    @Composable
+    private fun PlaylistsScreen(onOpen: (String) -> Unit) {
+        var names by remember { mutableStateOf(PlaylistStore.list(this)) }
+        var showNew by remember { mutableStateOf(false) }
+        var newName by remember { mutableStateOf("") }
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            names = PlaylistStore.list(this@MainActivity)
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Playlists", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "${names.size} listas guardadas",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    OutlinedButton(onClick = { showNew = true }) { Text("＋ Nueva") }
+                }
+            }
+            if (names.isEmpty()) {
+                item {
+                    Text(
+                        "Sin playlists todavía. Pulsa largo sobre una pista de " +
+                            "cualquier lista y usa \"Añadir a Playlist\".",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+            itemsIndexed(names) { _, name ->
+                val n = PlaylistStore.tracks(this@MainActivity, name).size
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .clickable { onOpen(name) }
+                        .padding(vertical = 8.dp, horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("🔖", modifier = Modifier.width(30.dp))
+                    Text(name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "$n pistas",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+        }
+        if (showNew) {
+            AlertDialog(
+                onDismissRequest = { showNew = false },
+                title = { Text("Nueva playlist") },
+                text = {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Nombre") },
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        enabled = newName.isNotBlank(),
+                        onClick = {
+                            val stored = PlaylistStore.create(this@MainActivity, newName)
+                            newName = ""
+                            showNew = false
+                            onOpen(stored)
+                        },
+                    ) { Text("Crear") }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { showNew = false }) {
+                        Text("Cancelar")
+                    }
+                },
+            )
+        }
+    }
+
+    /**
+     * One saved playlist: header actions (▶ Reproducir / ✏ Renombrar / 🗑
+     * Eliminar) + track rows. A row tap starts the queue at that track
+     * (`playTracks`), long-press opens the shared track context menu, and the
+     * trailing 🗑 removes the track from THIS list only.
+     */
+    @OptIn(ExperimentalFoundationApi::class)
+    @Composable
+    private fun PlaylistScreen(
+        name: String,
+        onOpenCtx: OpenCtx,
+        onChange: (String?) -> Unit,
+    ) {
+        var list by remember { mutableStateOf<List<MediaTrack>>(emptyList()) }
+        var tick by remember { mutableStateOf(0) }
+        var showRename by remember { mutableStateOf(false) }
+        var showDelete by remember { mutableStateOf(false) }
+        var newTitle by remember { mutableStateOf(name) }
+
+        androidx.compose.runtime.LaunchedEffect(name, tick) {
+            list = PlaylistStore.tracks(this@MainActivity, name)
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(name, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "${list.size} pistas",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    OutlinedButton(onClick = { playTracks(list, 0) }) { Text("▶ Reproducir") }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
+                    OutlinedButton(onClick = { newTitle = name; showRename = true }) {
+                        Text("✏ Renombrar")
+                    }
+                    OutlinedButton(onClick = { showDelete = true }) { Text("🗑 Eliminar") }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+            if (list.isEmpty()) {
+                item {
+                    Text(
+                        "Lista vacía. Pulsa largo sobre una pista y elige " +
+                            "\"Añadir a Playlist\".",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+            itemsIndexed(list) { i, t ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .combinedClickable(
+                            onClick = { playTracks(list, i) },
+                            onLongClick = { onOpenCtx(t, list, i) },
+                        )
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(vertical = 6.dp, horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(t.title, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "${t.artist} — ${t.album}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    Text(
+                        "🗑",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier
+                            .clickable {
+                                if (PlaylistStore.removeTrack(this@MainActivity, name, t.uri)) {
+                                    tick++
+                                }
+                            },
+                    )
+                }
+            }
+        }
+        if (showRename) {
+            AlertDialog(
+                onDismissRequest = { showRename = false },
+                title = { Text("Renombrar playlist") },
+                text = {
+                    OutlinedTextField(
+                        value = newTitle,
+                        onValueChange = { newTitle = it },
+                        label = { Text("Nuevo nombre") },
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        enabled = newTitle.isNotBlank(),
+                        onClick = {
+                            val stored = PlaylistStore.rename(this@MainActivity, name, newTitle)
+                            showRename = false
+                            onChange(stored)
+                        },
+                    ) { Text("Guardar") }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { showRename = false }) {
+                        Text("Cancelar")
+                    }
+                },
+            )
+        }
+        if (showDelete) {
+            AlertDialog(
+                onDismissRequest = { showDelete = false },
+                title = { Text("Eliminar playlist") },
+                text = { Text("¿Borrar \"$name\" y sus ${list.size} pistas guardadas?") },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        PlaylistStore.delete(this@MainActivity, name)
+                        showDelete = false
+                        onChange(null)
+                    }) { Text("Borrar") }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { showDelete = false }) {
+                        Text("Cancelar")
+                    }
+                },
+            )
         }
     }
 
@@ -1626,6 +2030,7 @@ class MainActivity : ComponentActivity() {
         onAlbum: () -> Unit,
         onFolder: () -> Unit,
         onLyrics: () -> Unit,
+        onAddToPlaylist: () -> Unit = {},
     ) {
         // BACK handled inside the overlay: inner-most BackHandler wins.
         BackHandler { onDismiss() }
@@ -1711,6 +2116,7 @@ class MainActivity : ComponentActivity() {
                             add("💿" to ("Ir a: ${track.album}" to onAlbum))
                         }
                         add("📁" to ("Ir a: carpeta" to onFolder))
+                        add("🔖" to ("Añadir a Playlist" to onAddToPlaylist))
                         add("📝" to ("Letras" to onLyrics))
                     }
                     actions.forEach { (glyph, pair) ->
@@ -1732,8 +2138,149 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ------------------------------------------------ lyrics (sprint 6)
+    // --------------------------------------------- add to playlist (sprint 10)
 
+    /**
+     * Bottom sheet behind "Añadir a Playlist": pick an existing list (tap) or
+     * create a new one inline. Feedback via toast; duplicates are reported and
+     * re-added silently keeps the list unchanged (`PlaylistStore.addTrack`).
+     */
+    @Composable
+    private fun AddToPlaylistSheet(
+        track: MediaTrack,
+        onClose: () -> Unit,
+    ) {
+        BackHandler { onClose() }
+        var names by remember { mutableStateOf(PlaylistStore.list(this)) }
+        var showNew by remember { mutableStateOf(names.isEmpty()) }
+        var newName by remember { mutableStateOf("") }
+        val scrim = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+
+        fun toast(text: String) =
+            android.widget.Toast.makeText(
+                this, text, android.widget.Toast.LENGTH_SHORT,
+            ).show()
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0x88000000))
+                .clickable(interactionSource = scrim, indication = null, onClick = onClose),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp),
+                tonalElevation = 8.dp,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp)
+                        .clickable(enabled = false) {},
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        track.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                    )
+                    if (!showNew) {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 320.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            item {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { showNew = true }
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .padding(vertical = 8.dp, horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("＋", modifier = Modifier.width(30.dp))
+                                    Text(
+                                        "Nueva playlist…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                }
+                            }
+                            itemsIndexed(names) { _, name ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            val added =
+                                                PlaylistStore.addTrack(this@MainActivity, name, track)
+                                            toast(
+                                                if (added) "Añadida a $name"
+                                                else "Ya estaba en $name",
+                                            )
+                                            onClose()
+                                        }
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .padding(vertical = 8.dp, horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("🔖", modifier = Modifier.width(30.dp))
+                                    Text(
+                                        name,
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        "${PlaylistStore.tracks(this@MainActivity, name).size} pistas",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (showNew) {
+                        AlertDialog(
+                            onDismissRequest = { showNew = false },
+                            title = { Text("Nueva playlist") },
+                            text = {
+                                OutlinedTextField(
+                                    value = newName,
+                                    onValueChange = { newName = it },
+                                    label = { Text("Nombre") },
+                                )
+                            },
+                            confirmButton = {
+                                androidx.compose.material3.TextButton(
+                                    enabled = newName.isNotBlank(),
+                                    onClick = {
+                                        val stored =
+                                            PlaylistStore.create(this@MainActivity, newName)
+                                        PlaylistStore.addTrack(
+                                            this@MainActivity, stored, track,
+                                        )
+                                        toast("Añadida a $stored")
+                                        showNew = false
+                                        onClose()
+                                    },
+                                ) { Text("Crear y añadir") }
+                            },
+                            dismissButton = {
+                                androidx.compose.material3.TextButton(
+                                    onClick = { showNew = false },
+                                ) { Text("Cancelar") }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------ lyrics (sprint 6)
     /**
      * Reads the synced .lrc sitting next to an audio file (block 5). Tries,
      * in order: file-system path (file:/absolute uris), MediaStore DATA of
@@ -1930,12 +2477,13 @@ class MainActivity : ComponentActivity() {
 
     // ------------------------------------------------------- settings screen
 
-    private enum class SettingsSub { LOOKFEEL, LIBRARY, ABOUT }
+    private enum class SettingsSub { LOOKFEEL, LIBRARY, ABOUT, AUDIO, HEADSET, ART, VIZ }
 
     /** Prefs included in data export/import (block 6). */
     private val BACKUP_PREFS = listOf(
         "dsp_presets", "playback_settings", "appearance",
-        "search_history", "track_ratings",
+        "search_history", "track_ratings", "audio_settings", "art_settings",
+        "library_settings", "viz_settings",
     )
 
     /**
@@ -1954,6 +2502,7 @@ class MainActivity : ComponentActivity() {
         startAtLibrary: Boolean,
         onStartAtLibrary: (Boolean) -> Unit,
         onClose: () -> Unit,
+        currentSnapshot: PlayerSnapshot,
     ) {
         var sub by remember { mutableStateOf<SettingsSub?>(null) }
         var note by remember { mutableStateOf("") }
@@ -1972,6 +2521,10 @@ class MainActivity : ComponentActivity() {
                             if (sub == null) "Ajustes" else when (sub) {
                                 SettingsSub.LOOKFEEL -> "Look and Feel"
                                 SettingsSub.LIBRARY -> "Biblioteca"
+                                SettingsSub.AUDIO -> "Audio"
+                                SettingsSub.HEADSET -> "Headset/Bluetooth"
+                                SettingsSub.ART -> "Album Art"
+                                SettingsSub.VIZ -> "Visualización"
                                 else -> "Acerca de"
                             },
                             style = MaterialTheme.typography.titleMedium,
@@ -1992,6 +2545,10 @@ class MainActivity : ComponentActivity() {
                         startAtLibrary, onStartAtLibrary,
                     )
                     SettingsSub.LIBRARY -> SettingsLibraryScreen { note = it }
+                    SettingsSub.AUDIO -> AudioSettingsScreen()
+                    SettingsSub.HEADSET -> HeadsetSettingsScreen()
+                    SettingsSub.ART -> ArtSettingsScreen(currentSnapshot)
+                    SettingsSub.VIZ -> VizSettingsScreen { note = it }
                     SettingsSub.ABOUT -> AboutScreen()
                     null -> SettingsRoot { s ->
                         note = ""
@@ -2015,12 +2572,15 @@ class MainActivity : ComponentActivity() {
     private fun SettingsRoot(onOpen: (SettingsSub) -> Unit) {
         val rows = listOf(
             SettingsRow("🎨", "Look and Feel", "Tema, acento, tipografía", SettingsSub.LOOKFEEL),
-            SettingsRow("🎵", "Audio", "Crossfade/RG/salida — sprint 7", null),
-            SettingsRow("📈", "Visualización", "Visualizer — sprint 9", null),
-            SettingsRow("🖼", "Background", "Fondo de carátula — sprint 8", null),
-            SettingsRow("💿", "Album Art", "Carátulas — sprint 8", null),
-            SettingsRow("📚", "Biblioteca", "Rescan y estado del escaneo", SettingsSub.LIBRARY),
-            SettingsRow("🎧", "Headset/Bluetooth", "Botones de auricular — sprint 7", null),
+            SettingsRow("🎵", "Audio", "Focus/Replay Gain — bloque 8", SettingsSub.AUDIO),
+            SettingsRow(
+                "📈", "Visualización",
+                "Espectro player/EQ, estilo, opacidad — bloque 14", SettingsSub.VIZ,
+            ),
+            SettingsRow("🖼", "Background", "Fondo — en Album Art (bl. 13)", null),
+            SettingsRow("💿", "Album Art", "Carátulas + fondo — bloque 12/13", SettingsSub.ART),
+            SettingsRow("📚", "Biblioteca", "Rescan, progreso, stats, filtros", SettingsSub.LIBRARY),
+            SettingsRow("🎧", "Headset/Bluetooth", "Botones y conexión — bloque 10", SettingsSub.HEADSET),
             SettingsRow("🔒", "Lock Screen", "Opciones de lockscreen", null),
             SettingsRow("⚗", "Misc", "Scrobbling/Android Auto — sprint 9", null),
             SettingsRow("ℹ", "About", "Versión y datos", SettingsSub.ABOUT),
@@ -2188,6 +2748,13 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun SettingsLibraryScreen(onNote: (String) -> Unit) {
+        val ctx = this@MainActivity
+        var storeProgress by remember { mutableStateOf(LibrarySettings.storeProgress(ctx)) }
+        var progressMin by remember { mutableStateOf(LibrarySettings.progressMinMinutes(ctx)) }
+        var countPct by remember { mutableStateOf(LibrarySettings.countPct(ctx)) }
+        var ignoreShort by remember { mutableStateOf(LibrarySettings.ignoreShort(ctx)) }
+        var stats by remember { mutableStateOf(TrackStateStore.statsSummary(ctx)) }
+
         Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
             Text(
                 "${libraryOrEmpty.size} pistas en MediaStore · " +
@@ -2199,6 +2766,192 @@ class MainActivity : ComponentActivity() {
                 libraryOrEmpty = MediaStoreLibrary.query(this@MainActivity)
                 onNote("Rescan completado: ${libraryOrEmpty.size} pistas")
             }) { Text("⭮ Rescan") }
+
+            Spacer(Modifier.height(12.dp))
+            Text("Per Track Progress", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = storeProgress, onCheckedChange = { on ->
+                    LibrarySettings.setStoreProgress(ctx, on)
+                    storeProgress = on
+                })
+                Text("  Almacenar progreso por pista", style = MaterialTheme.typography.bodyLarge)
+            }
+            Text(
+                "Solo pistas de al menos $progressMin min guardan posición " +
+                    "(podcasts/sets); al reabrirlas continúan donde quedaron.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Text("Umbral: $progressMin min", style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = progressMin.toFloat(),
+                onValueChange = { v ->
+                    LibrarySettings.setProgressMinMinutes(ctx, v.roundToInt())
+                    progressMin = LibrarySettings.progressMinMinutes(ctx)
+                },
+                valueRange = 1f..90f,
+                steps = 88,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text("Count as played", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Una escucha cuenta tras reproducir al menos el $countPct % " +
+                    "(avance natural cuenta siempre; pausar no cuenta).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Text("Umbral: $countPct %", style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = countPct.toFloat(),
+                onValueChange = { v ->
+                    LibrarySettings.setCountPct(ctx, v.roundToInt())
+                    countPct = LibrarySettings.countPct(ctx)
+                },
+                valueRange = 1f..100f,
+                steps = 98,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text("Filtros de biblioteca", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = ignoreShort, onCheckedChange = { on ->
+                    LibrarySettings.setIgnoreShort(ctx, on)
+                    ignoreShort = on
+                })
+                Text("  Ignorar pistas cortas (< 6 s)", style = MaterialTheme.typography.bodyLarge)
+            }
+            Text(
+                "Notificaciones/melodías excluidas del rescan. Video ya queda " +
+                    "fuente de los datos (solo MediaStore.Audio). Requiere rescan.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text("Estadísticas", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "${stats.first} pistas reproducidas · ${stats.second} escuchas totales",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(onClick = {
+                TrackStateStore.resetStats(ctx)
+                stats = TrackStateStore.statsSummary(ctx)
+                onNote("Estadísticas reiniciadas (posiciones por pista conservadas)")
+            }) { Text("🗑 Reset stats") }
+            Text(
+                "Progreso/stats viven en filesDir/track_state.json, no se borran " +
+                    "en el rescan. Reset solo limpia conteos, NO las posiciones.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+    }
+
+    /**
+     * Visualization settings (sprint 10 — block 14 núcleo). Live effect:
+     * `SpectrumBars` re-reads `viz_settings` every 50 ms, so these controls act
+     * immediately on the player and the EQ screen. Display-only settings:
+     * no session push needed.
+     */
+    @Composable
+    private fun VizSettingsScreen(onNote: (String) -> Unit) {
+        val ctx = this@MainActivity
+        var playerOn by remember { mutableStateOf(VizSettings.playerSpectrum(ctx)) }
+        var style by remember { mutableStateOf(VizSettings.spectrumStyle(ctx)) }
+        var opacity by remember { mutableStateOf(VizSettings.panelOpacity(ctx)) }
+        var eqMode by remember { mutableStateOf(VizSettings.eqSpectrum(ctx)) }
+
+        Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
+            Text(
+                "Espectro del player (barra en vivo sobre el fondo)",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = playerOn, onCheckedChange = { on ->
+                    VizSettings.setPlayerSpectrum(ctx, on)
+                    playerOn = on
+                    onNote(if (on) "Espectro del player ON" else "Espectro del player OFF")
+                })
+                Text("  Visualization On Player Screen", style = MaterialTheme.typography.bodyLarge)
+            }
+            Text(
+                "Visible en el player cuando se reproduce (también con el botón 📊 " +
+                    "de la cabecera). Estilo y opacidad aplican a player y EQ.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text("Estilo de las barras", style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(onClick = {
+                    VizSettings.setSpectrumStyle(ctx, VizSettings.STYLE_CLASSIC)
+                    style = VizSettings.spectrumStyle(ctx)
+                }) {
+                    Text(
+                        "▦ Classic",
+                        color = if (style == VizSettings.STYLE_CLASSIC)
+                            MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                    )
+                }
+                OutlinedButton(onClick = {
+                    VizSettings.setSpectrumStyle(ctx, VizSettings.STYLE_ROUNDED)
+                    style = VizSettings.spectrumStyle(ctx)
+                }) {
+                    Text(
+                        "● Rounded",
+                        color = if (style == VizSettings.STYLE_ROUNDED)
+                            MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text("Opacidad del panel", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Top Visualization Panel Opacity — $opacity %",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Slider(
+                value = opacity.toFloat(),
+                onValueChange = { v ->
+                    VizSettings.setPanelOpacity(ctx, v.roundToInt())
+                    opacity = VizSettings.panelOpacity(ctx)
+                },
+                valueRange = 0f..100f,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text("Equalizer Screen Spectrum", style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    "Disabled" to VizSettings.EQ_DISABLED,
+                    "Classic" to VizSettings.STYLE_CLASSIC,
+                    "Rounded" to VizSettings.STYLE_ROUNDED,
+                ).forEach { (label, mode) ->
+                    OutlinedButton(onClick = {
+                        VizSettings.setEqSpectrum(ctx, mode)
+                        eqMode = VizSettings.eqSpectrum(ctx)
+                    }) {
+                        Text(
+                            label,
+                            color = if (eqMode == mode)
+                                MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        )
+                    }
+                }
+            }
+            Text(
+                "Referencia del catálogo: Disabled / Classic / Rounded. Big Spectrum " +
+                    "MilkDrop (presets .milk), Visualization Delay y opciones de render " +
+                    "(HD/Crop/FPS) siguen pendientes: Poweramp carga presets de terceros.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
         }
     }
 
@@ -2218,6 +2971,296 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // -------------------------------------------- audio / headset screens (7)
+
+    /**
+     * Block 8 audio screen: focus behaviour toggles + Replay Gain. RG changes
+     * persist to audio_settings and push the trim live to the session.
+     */
+    @Composable
+    private fun AudioSettingsScreen() {
+        val ctx = this@MainActivity
+        var focusPause by remember { mutableStateOf(AudioSettings.focusPause(ctx)) }
+        var focusResume by remember { mutableStateOf(AudioSettings.focusResume(ctx)) }
+        var focusDuck by remember { mutableStateOf(AudioSettings.focusDuck(ctx)) }
+        var rgOn by remember { mutableStateOf(AudioSettings.rgEnabled(ctx)) }
+        var rgSource by remember { mutableStateOf(AudioSettings.rgSource(ctx)) }
+        var rgDb by remember { mutableStateOf(AudioSettings.rgPregainDb(ctx)) }
+
+        Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
+            Text("Audio focus", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = focusPause, onCheckedChange = { on ->
+                    AudioSettings.setFocusPause(ctx, on)
+                    focusPause = on
+                })
+                Text("  Pausar al perder foco", style = MaterialTheme.typography.bodyLarge)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = focusResume, onCheckedChange = { on ->
+                    AudioSettings.setFocusResume(ctx, on)
+                    focusResume = on
+                })
+                Text("  Reanudar al recuperar foco", style = MaterialTheme.typography.bodyLarge)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = focusDuck, onCheckedChange = { on ->
+                    AudioSettings.setFocusDuck(ctx, on)
+                    focusDuck = on
+                })
+                Text("  Duck (bajar volumen)", style = MaterialTheme.typography.bodyLarge)
+            }
+            Text(
+                "Foco: pausa/reanudación por Events de otras apps " +
+                    "(llamadas, navegación). Duck baja el volumen en vez de pausar.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text("Replay Gain", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = rgOn, onCheckedChange = { on ->
+                    AudioSettings.setRgEnabled(ctx, on)
+                    rgOn = on
+                    sendReplayGain()
+                })
+                Text("  RG activo", style = MaterialTheme.typography.bodyLarge)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = {
+                    AudioSettings.setRgSource(ctx, AudioSettings.RG_SOURCE_TRACK)
+                    rgSource = AudioSettings.RG_SOURCE_TRACK
+                    sendReplayGain()
+                }) {
+                    val mark = if (rgSource == AudioSettings.RG_SOURCE_TRACK) " ✓" else ""
+                    Text("Pista$mark", style = MaterialTheme.typography.bodyLarge)
+                }
+                TextButton(onClick = {
+                    AudioSettings.setRgSource(ctx, AudioSettings.RG_SOURCE_ALBUM)
+                    rgSource = AudioSettings.RG_SOURCE_ALBUM
+                    sendReplayGain()
+                }) {
+                    val mark = if (rgSource == AudioSettings.RG_SOURCE_ALBUM) " ✓" else ""
+                    Text("Álbum$mark", style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+            Text(
+                "Pregain: ${"%+.1f".format(rgDb)} dB",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Slider(
+                value = rgDb,
+                onValueChange = { v ->
+                    AudioSettings.setRgPregainDb(ctx, v)
+                    rgDb = AudioSettings.rgPregainDb(ctx)
+                    sendReplayGain()
+                },
+                valueRange = -12f..12f,
+                steps = 48,
+                enabled = rgOn,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "Trim global aplicado en la cadena DSP (preamp); los tags " +
+                    "por pista llegan en sprints posteriores.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+    }
+
+    /**
+     * Block 10 headset screen: connection behaviour + button mapping. Values
+     * are read by the service at event time (plug/BT broadcasts, media keys).
+     */
+    @Composable
+    private fun HeadsetSettingsScreen() {
+        val ctx = this@MainActivity
+        var pauseOnDisconnect by remember { mutableStateOf(AudioSettings.pauseOnDisconnect(ctx)) }
+        var resumeWired by remember { mutableStateOf(AudioSettings.resumeOnWired(ctx)) }
+        var resumeBt by remember { mutableStateOf(AudioSettings.resumeOnBluetooth(ctx)) }
+        var respond by remember { mutableStateOf(AudioSettings.respondToButtons(ctx)) }
+        var wired by remember { mutableStateOf(AudioSettings.wiredAction(ctx)) }
+        var bt by remember { mutableStateOf(AudioSettings.btAction(ctx)) }
+
+        Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
+            Text("Conexión", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = pauseOnDisconnect, onCheckedChange = { on ->
+                    AudioSettings.setPauseOnDisconnect(ctx, on)
+                    pauseOnDisconnect = on
+                })
+                Text("  Pausar al desconectar", style = MaterialTheme.typography.bodyLarge)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = resumeWired, onCheckedChange = { on ->
+                    AudioSettings.setResumeOnWired(ctx, on)
+                    resumeWired = on
+                })
+                Text("  Reanudar al enchufar Jack", style = MaterialTheme.typography.bodyLarge)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = resumeBt, onCheckedChange = { on ->
+                    AudioSettings.setResumeOnBluetooth(ctx, on)
+                    resumeBt = on
+                })
+                Text("  Reanudar al conectar Bluetooth", style = MaterialTheme.typography.bodyLarge)
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text("Botones", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = respond, onCheckedChange = { on ->
+                    AudioSettings.setRespondToButtons(ctx, on)
+                    respond = on
+                })
+                Text("  Responder a botones", style = MaterialTheme.typography.bodyLarge)
+            }
+            if (!respond) {
+                Text(
+                    "Las pulsaciones del auricular se ignoran por completo.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            Text(
+                "Pulsación simple (Jack):",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            Row {
+                listOf(
+                    "play_pause" to "⏯", "next" to "⏭", "prev" to "⏮",
+                ).forEach { (action, glyph) ->
+                    TextButton(onClick = {
+                        AudioSettings.setWiredAction(ctx, action)
+                        wired = action
+                    }) {
+                        Text(glyph + if (wired == action) " ✓" else "")
+                    }
+                }
+            }
+            Text(
+                "Pulsación simple (Bluetooth):",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            Row {
+                listOf(
+                    "play_pause" to "⏯", "next" to "⏭", "prev" to "⏮",
+                ).forEach { (action, glyph) ->
+                    TextButton(onClick = {
+                        AudioSettings.setBtAction(ctx, action)
+                        bt = action
+                    }) {
+                        Text(glyph + if (bt == action) " ✓" else "")
+                    }
+                }
+            }
+            Text(
+                "Doble: siguiente · Triple: anterior · Mantener: siguiente.\n" +
+                    "Si ambos están conectados manda la acción del Jack.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+    }
+
+    /**
+     * Blocks 12/13 (sprint 8): carátulas + fondo derivado. Display-only
+     * settings (no session push); read live by the composables.
+     */
+    @Composable
+    private fun ArtSettingsScreen(currentSnapshot: PlayerSnapshot) {
+        val ctx = this@MainActivity
+        var highRes by remember { mutableStateOf(ArtSettings.highResArt(ctx)) }
+        var keepAspect by remember { mutableStateOf(ArtSettings.keepAspect(ctx)) }
+        var bgOn by remember { mutableStateOf(ArtSettings.bgEnabled(ctx)) }
+        var blur by remember { mutableStateOf(ArtSettings.bgBlur(ctx)) }
+        var gradient by remember { mutableStateOf(ArtSettings.bgGradient(ctx)) }
+
+        Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
+            Text("Carátula", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = highRes, onCheckedChange = { on ->
+                    ArtSettings.setHighResArt(ctx, on)
+                    highRes = on
+                })
+                Text("  Enviar carátula en alta resolución", style = MaterialTheme.typography.bodyLarge)
+            }
+            Text(
+                "Alta resolución: bitmap completo hacia la sesión/notificación; " +
+                    "OFF limita a 512 px.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = keepAspect, onCheckedChange = { on ->
+                    ArtSettings.setKeepAspect(ctx, on)
+                    keepAspect = on
+                })
+                Text("  Mantener proporción", style = MaterialTheme.typography.bodyLarge)
+            }
+            Text(
+                "Fuentes: carátula de álbum del sistema (MediaStore por albumId) " +
+                    "y Cover.jpg/… junto al archivo para pistas con ruta directa. " +
+                    "Pistas por SAF árbol sin ruta local muestran glifo genérico.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            // Diagnóstico block 12: what the art lookup currently sees.
+            Text(
+                "Pista actual: albumId=${currentSnapshot.albumId} · " +
+                    "carpeta=${currentSnapshot.folder.ifEmpty { "—" }} " +
+                    "(bus n=${QueueBus.tracks.size} i=${QueueBus.index})",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text("Fondo derivado (bloque 13)", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = bgOn, onCheckedChange = { on ->
+                    ArtSettings.setBgEnabled(ctx, on)
+                    bgOn = on
+                })
+                Text("  Fondo borroso del player", style = MaterialTheme.typography.bodyLarge)
+            }
+            Text(
+                "Desenfoque de fondo: $blur",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Slider(
+                value = blur.toFloat(),
+                onValueChange = { v ->
+                    blur = v.toInt().coerceIn(0, ArtSettings.BLUR_MAX)
+                    ArtSettings.setBgBlur(ctx, blur)
+                },
+                valueRange = 0f..ArtSettings.BLUR_MAX.toFloat(),
+                steps = ArtSettings.BLUR_MAX - 1,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "Gradiente del fondo: $gradient",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Slider(
+                value = gradient.toFloat(),
+                onValueChange = { v ->
+                    gradient = v.toInt().coerceIn(0, ArtSettings.GRADIENT_MAX)
+                    ArtSettings.setBgGradient(ctx, gradient)
+                },
+                valueRange = 0f..ArtSettings.GRADIENT_MAX.toFloat(),
+                steps = ArtSettings.GRADIENT_MAX - 1,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedButton(onClick = {
+                AlbumArtLoader.clear()
+                RootNote.note = "Cache de carátulas limpiada"
+            }) { Text("🗑 Borrar cache de carátulas") }
+        }
+    }
+
     // ------------------------------------------------- export / import data
 
     /** Preferences + EQ preset files → JSON in Downloads (block 6). */
@@ -2234,6 +3277,19 @@ class MainActivity : ComponentActivity() {
             prefsObj.put(name, o)
         }
         root.put("prefs", prefsObj)
+        // Per-track state (block 11): progress + counts, only live entries.
+        val trackState = org.json.JSONObject()
+        for ((uri, s) in TrackStateStore.snapshotJson(this)) {
+            if (s.positionMs <= 0L && s.playedCount <= 0) continue
+            trackState.put(
+                uri,
+                org.json.JSONObject()
+                    .put("pos", s.positionMs)
+                    .put("plays", s.playedCount)
+                    .put("last", s.lastPlayedMs),
+            )
+        }
+        root.put("trackState", trackState)
         val presets = org.json.JSONArray()
         val dir = File(filesDir, "eq")
         dir.listFiles { f -> f.isFile && f.name.endsWith(".json") }?.forEach { f ->
@@ -2244,6 +3300,17 @@ class MainActivity : ComponentActivity() {
             }
         }
         root.put("presets", presets)
+        // Playlists (sprint 10): each file is self-contained JSON.
+        val playlists = org.json.JSONArray()
+        File(filesDir, "playlists")
+            .listFiles { f -> f.isFile && f.name.endsWith(".json") }?.forEach { f ->
+                runCatching {
+                    playlists.put(
+                        org.json.JSONObject().put("file", f.name).put("json", f.readText()),
+                    )
+                }
+            }
+        root.put("playlists", playlists)
 
         val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
             .format(java.util.Date())
@@ -2334,10 +3401,39 @@ class MainActivity : ComponentActivity() {
                 runCatching { File(dir, safe).writeText(o.getString("json")) }
             }
         }
+        // Per-track state (block 11): merge progress + counts back in.
+        root.optJSONObject("trackState")?.let { ts ->
+            val entries = HashMap<String, TrackStateStore.TrackState>()
+            for (uri in ts.keys()) {
+                val o = ts.optJSONObject(uri) ?: continue
+                entries[uri] = TrackStateStore.TrackState(
+                    positionMs = o.optLong("pos"),
+                    playedCount = o.optInt("plays"),
+                    lastPlayedMs = o.optLong("last"),
+                )
+            }
+            if (entries.isNotEmpty()) TrackStateStore.importAll(this, entries)
+        }
+        // Playlists (sprint 10): restore each saved list file.
+        root.optJSONArray("playlists")?.let { arr ->
+            val dir = File(filesDir, "playlists").apply { mkdirs() }
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val name = o.optString("file").ifBlank { "import$i.json" }
+                val safe = name.map {
+                    if (it.isLetterOrDigit() || it in " .-_") it else '_'
+                }.joinToString("")
+                runCatching { File(dir, safe).writeText(o.getString("json")) }
+            }
+        }
         // Apply the restored EQ immediately (session may be connected).
         runCatching { sendPreset(PresetStore.loadCurrent(this)) }
+        // audio_settings (replay gain) was restored above — re-apply the trim.
+        runCatching { sendReplayGain() }
         return "Import OK (${BACKUP_PREFS.size} prefs · " +
-            "${root.optJSONArray("presets")?.length() ?: 0} presets)"
+            "${root.optJSONArray("presets")?.length() ?: 0} presets · " +
+            "${root.optJSONArray("playlists")?.length() ?: 0} playlists · " +
+            "${root.optJSONObject("trackState")?.length() ?: 0} pistas estado)"
     }
 
     @Composable
@@ -2353,6 +3449,9 @@ class MainActivity : ComponentActivity() {
         val uri: String = "",
         val isPlaying: Boolean = false,
         val format: String = "",
+        /** Current-track cues for art lookup (MediaStore albumId or file uri). */
+        val albumId: Long = -1L,
+        val folder: String = "",
     )
 
     @Composable
@@ -2413,12 +3512,17 @@ class MainActivity : ComponentActivity() {
             }
             fmt = FormatBus.formatString(sRate, bps, mime)
         }
+        // Album art lookup cues come from the published queue (same process,
+        // QueueBus carries the real MediaTrack list incl. albumId/folder).
+        val qt = QueueBus.tracks.getOrNull(QueueBus.index)
         return PlayerSnapshot(
             title = c.mediaMetadata.title?.toString() ?: "—",
             artist = c.mediaMetadata.artist?.toString() ?: "",
             uri = c.currentMediaItem?.mediaId ?: "",
             isPlaying = c.isPlaying,
             format = fmt,
+            albumId = qt?.albumId ?: -1L,
+            folder = qt?.folder ?: "",
         )
     }
 
@@ -2451,13 +3555,28 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    /**
+     * Live spectrum bars (sprint 10 — block 14 núcleo). Style/opacity come
+     * from `viz_settings`, re-read inside the 50 ms poll (cached prefs, cheap)
+     * so the header 📊 toggle and the Visualization screen act instantly
+     * without any session push. Opacity maps 1:1 onto the bars alpha
+     * (default 60 == the previous hard-coded 0x99 alpha).
+     */
     private fun SpectrumBars(isPlaying: Boolean) {
         var spectrum by androidx.compose.runtime.remember {
             mutableStateOf(VisualizerTap.spectrum())
         }
+        var style by androidx.compose.runtime.remember {
+            mutableStateOf(VizSettings.spectrumStyle(this@MainActivity))
+        }
+        var alphaPct by androidx.compose.runtime.remember {
+            mutableStateOf(VizSettings.panelOpacity(this@MainActivity))
+        }
         androidx.compose.runtime.LaunchedEffect(isPlaying) {
             while (kotlinx.coroutines.currentCoroutineContext().isActive) {
                 if (isPlaying) spectrum = VisualizerTap.spectrum()
+                style = VizSettings.spectrumStyle(this@MainActivity)
+                alphaPct = VizSettings.panelOpacity(this@MainActivity)
                 kotlinx.coroutines.delay(50)
             }
         }
@@ -2467,6 +3586,9 @@ class MainActivity : ComponentActivity() {
             val fHigh = 16_000.0
             val logSpan = kotlin.math.ln(fHigh / fLow)
             val barW = size.width / barCount
+            val color = Color(0xFF39A7E4).copy(alpha = alphaPct / 100f)
+            val rounded = style == VizSettings.STYLE_ROUNDED
+            val corner = androidx.compose.ui.geometry.CornerRadius(barW * 0.45f, barW * 0.45f)
             for (b in 0 until barCount) {
                 val freq = fLow * Math.exp(logSpan * b / (barCount - 1.0))
                 val k = (freq / 48_000.0 * VisualizerTap.bins).toInt()
@@ -2474,11 +3596,13 @@ class MainActivity : ComponentActivity() {
                 val mag = spectrum.getOrNull(k) ?: 0f
                 val db = (20.0 * Math.log10(mag + 1e-9))
                 val level = ((db + 60.0) / 60.0).coerceIn(0.0, 1.0).toFloat()
-                drawRect(
-                    color = Color(0x9939A7E4),
-                    topLeft = Offset(b * barW + 1f, size.height * (1f - level)),
-                    size = androidx.compose.ui.geometry.Size(barW - 2f, size.height * level),
-                )
+                val topLeft = Offset(b * barW + 1f, size.height * (1f - level))
+                val barSize = androidx.compose.ui.geometry.Size(barW - 2f, size.height * level)
+                if (rounded) {
+                    drawRoundRect(color = color, topLeft = topLeft, size = barSize, cornerRadius = corner)
+                } else {
+                    drawRect(color = color, topLeft = topLeft, size = barSize)
+                }
             }
         }
     }
@@ -2725,6 +3849,18 @@ class MainActivity : ComponentActivity() {
         controller?.sendCustomCommand(
             androidx.media3.session.SessionCommand(PlaybackService.CMD_SET_CROSSFADE, bundle),
             bundle,
+        )
+    }
+
+    /**
+     * Push the Replay Gain trim live to the playback session. Prefs
+     * (audio_settings) are already persisted by the caller; the service just
+     * re-reads them and rebuilds the DSP chain trim.
+     */
+    private fun sendReplayGain() {
+        controller?.sendCustomCommand(
+            androidx.media3.session.SessionCommand(PlaybackService.CMD_SET_REPLAY_GAIN, Bundle.EMPTY),
+            Bundle.EMPTY,
         )
     }
 }

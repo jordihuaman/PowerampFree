@@ -20,15 +20,22 @@ object QueueStore {
     private const val FILE = "queue.json"
 
     fun save(context: Context, items: List<MediaTrack>, startIndex: Int, positionMs: Long) {
+        if (startIndex !in items.indices) return // never persist a corrupt index
         runCatching {
             val arr = JSONArray()
             for (t in items) arr.put(
-                JSONObject()
-                    .put("uri", t.uri)
-                    .put("title", t.title)
-                    .put("artist", t.artist)
-                    .put("album", t.album)
-                    .put("durationMs", t.durationMs),
+                JSONObject().apply {
+                    put("uri", t.uri)
+                    put("title", t.title)
+                    put("artist", t.artist)
+                    put("album", t.album)
+                    put("durationMs", t.durationMs)
+                    // Art + folder cues (block 12): survive restore so the
+                    // album-art lookup keeps working after process death.
+                    if (t.albumId >= 0) put("albId", t.albumId)
+                    if (t.trackNo > 0) put("trk", t.trackNo)
+                    if (t.folder.isNotEmpty()) put("dir", t.folder)
+                },
             )
             val doc = JSONObject()
                 .put("index", startIndex)
@@ -56,6 +63,9 @@ object QueueStore {
                             artist = o.optString("artist"),
                             album = o.optString("album"),
                             durationMs = o.optLong("durationMs", 0L),
+                            albumId = o.optLong("albId", -1L),
+                            trackNo = o.optInt("trk", 0),
+                            folder = o.optString("dir"),
                         ),
                     )
                 }
