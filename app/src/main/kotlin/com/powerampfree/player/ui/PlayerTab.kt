@@ -147,7 +147,7 @@ internal fun MainActivity.AlbumArtImage(snap: PlayerSnapshot, px: Int, modifier:
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                Text("🎵", style = MaterialTheme.typography.titleLarge)
+                PafIcon(PafIconKind.Note, Paf.Text3, 28.dp)
             }
         }
     }
@@ -206,51 +206,10 @@ internal fun MainActivity.PlayerBackground(snap: PlayerSnapshot, modifier: Modif
     }
 
 
-    // -------------------------------------------------------- mini player
-
-    @OptIn(ExperimentalFoundationApi::class)
-    @Composable
-internal fun MainActivity.MiniPlayerBar(snap: PlayerSnapshot, onOpen: () -> Unit) {
-        Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpen)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AlbumArtImage(
-                    snap = snap,
-                    px = 48,
-                    modifier = Modifier.size(44.dp),
-                )
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        snap.title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        modifier = Modifier.basicMarquee(),
-                    )
-                    if (snap.artist.isNotEmpty()) {
-                        Text(
-                            snap.artist,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            maxLines = 1,
-                        )
-                    }
-                }
-                androidx.compose.material3.TextButton(onClick = { togglePlayPause() }) {
-                    Text(if (snap.isPlaying) "⏸" else "▶")
-                }
-                androidx.compose.material3.TextButton(onClick = { sendSkip(true) }) { Text("⏭") }
-            }
-        }
-    }
-
-
     // -------------------------------------------------------- player tab
+
+    // (MiniPlayerBar retirado: sustituido por PafMiniRow/PafSeekBand en
+    // ui/BottomBar.kt, estilo pastilla de la referencia.)
 
     @OptIn(ExperimentalFoundationApi::class)
     @Composable

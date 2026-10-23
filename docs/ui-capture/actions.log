@@ -1,0 +1,78 @@
+﻿2026-10-22 23:39:34  CAP player-main (70 nodes)
+2026-10-22 23:40:33  LAUNCH poweramp
+2026-10-22 23:40:35  FOCUS   mCurrentFocus=Window{527ac89 u0 com.google.android.dialer/com.google.android.dialer.extensions.GoogleDialtactsActivity}
+2026-10-22 23:40:38  CAP player-main (132 nodes)
+2026-10-22 23:43:59  CAP player-main (54 nodes)
+2026-10-22 23:44:00  TAP (884,1098)
+2026-10-22 23:44:00  TAP -> id=com.maxmpz.audioplayer:id/lyrics desc=Lyrics text= @ (884,1098)
+2026-10-22 23:44:05  CAP player-lyrics (55 nodes)
+2026-10-22 23:44:05  BACK
+2026-10-22 23:44:10  CAP player-after-lyrics (54 nodes)
+2026-10-22 23:44:10  TAP (134,1476)
+2026-10-22 23:44:11  TAP -> id=com.maxmpz.audioplayer:id/vis_button_layout desc=Visualization text= @ (134,1476)
+2026-10-22 23:44:16  CAP player-vis-menu (54 nodes)
+2026-10-22 23:44:16  BACK
+2026-10-22 23:44:21  CAP player-after-vis (31 nodes)
+2026-10-22 23:47:27  CAP zztest (31 nodes)
+2026-10-22 23:50:33  LAUNCH poweramp
+2026-10-22 23:50:33  FOCUS 
+2026-10-22 23:50:33  CAP player-main (54 nodes)
+2026-10-22 23:58:15  CAP player-main (54 nodes)
+2026-10-22 23:58:15  TAP (884,1098)
+2026-10-22 23:58:16  TAP -> id=com.maxmpz.audioplayer:id/lyrics desc=Lyrics text= @ (884,1098)
+2026-10-23 00:03:02  CAP test-shot (54 nodes)
+2026-10-23 00:03:34  CAP player-main (54 nodes)
+2026-10-23 00:03:34  TAP (884,1098)
+2026-10-23 00:03:35  TAP -> id=com.maxmpz.audioplayer:id/lyrics desc=Lyrics text= @ (884,1098)
+2026-10-23 00:03:39  CAP player-lyrics (54 nodes)
+2026-10-23 00:03:39  BACK
+2026-10-23 00:03:45  CAP player-after-lyrics (31 nodes)
+2026-10-23 00:05:57  LAUNCH poweramp
+2026-10-23 00:06:00  CAP player-main (54 nodes)
+2026-10-23 00:06:00  TAP (134,1476)
+2026-10-23 00:06:01  TAP -> id=com.maxmpz.audioplayer:id/vis_button_layout desc=Visualization text= @ (134,1476)
+2026-10-23 00:06:05  CAP player-vis-menu (58 nodes)
+2026-10-23 00:07:21  CAP player-vis-toast (54 nodes)
+2026-10-23 00:07:21  TAP (134,1476)
+2026-10-23 00:07:22  TAP -> id=com.maxmpz.audioplayer:id/vis_button_layout desc=Visualization text= @ (134,1476)
+2026-10-23 00:07:27  CAP player-vis-fullscreen (54 nodes)
+2026-10-23 00:07:30  CAP player-vis-fullscreen-b (54 nodes)
+2026-10-23 00:07:30  BACK
+2026-10-23 00:07:35  CAP player-after-vis-back (31 nodes)
+2026-10-23 00:14:13  LAUNCH poweramp
+2026-10-23 00:14:14  FOCUS mCurrentFocus=Window{a8b7bd5 u0 com.maxmpz.audioplayer/com.maxmpz.audioplayer.MainActivity}
+2026-10-23 00:14:17  CAP tab-player (54 nodes)
+2026-10-23 00:14:17  TAP (157,2304)
+2026-10-23 00:14:18  TAP -> id=com.maxmpz.audioplayer:id/cmd_nav_to_lib desc=Library text= @ (157,2304)
+2026-10-23 00:14:22  CAP tab-library (81 nodes)
+2026-10-23 00:14:23  TAP (413,2304)
+2026-10-23 00:14:23  TAP -> id=com.maxmpz.audioplayer:id/cmd_nav_to_eq desc=Equ/Effects text= @ (413,2304)
+2026-10-23 00:14:28  CAP tab-eq (67 nodes)
+2026-10-23 00:14:28  TAP (669,2304)
+2026-10-23 00:14:29  TAP -> id=com.maxmpz.audioplayer:id/cmd_nav_to_search desc=Search text= @ (669,2304)
+2026-10-23 00:14:33  CAP tab-search (53 nodes)
+2026-10-23 00:14:33  TAP (925,2304)
+2026-10-23 00:14:34  TAP -> id=com.maxmpz.audioplayer:id/cmd_nav_more desc=Main Menu text= @ (925,2304)
+2026-10-23 00:14:38  CAP tab-menu (53 nodes)
+2026-10-23 00:17:24  BACK
+2026-10-23 00:17:29  CAP search-no-keyboard (53 nodes)
+2026-10-23 00:17:29  TAP (925,2304)
+2026-10-23 00:17:30  TAP -> id=com.maxmpz.audioplayer:id/cmd_nav_more desc=Main Menu text= @ (925,2304)
+2026-10-23 00:17:34  CAP main-menu (66 nodes)
+2026-10-23 00:21:12  CAP state-now (66 nodes)
+2026-10-23 00:22:18  BACK
+2026-10-23 00:22:23  CAP after-menu-back (53 nodes)
+2026-10-23 00:22:23  TAP (157,2304)
+2026-10-23 00:22:24  TAP -> id=com.maxmpz.audioplayer:id/cmd_nav_to_lib desc=Library text= @ (157,2304)
+2026-10-23 00:22:28  CAP lib-top (81 nodes)
+2026-10-23 00:22:28  TAP (324,414)
+2026-10-23 00:22:29  TAP -> id=com.maxmpz.audioplayer:id/title desc= text=All Songs @ (324,414)
+2026-10-23 00:22:33  CAP lib-all-songs (81 nodes)
+2026-10-23 00:24:37  BACK
+2026-10-23 00:24:42  CAP lib-back (81 nodes)
+2026-10-23 00:24:42  TAP (305,594)
+2026-10-23 00:24:43  TAP -> id=com.maxmpz.audioplayer:id/title desc= text=Folders @ (305,594)
+2026-10-23 00:24:47  CAP lib-folders (45 nodes)
+2026-10-23 00:26:36  TAP (270,1213)
+2026-10-23 00:26:37  TAP -> id=com.maxmpz.audioplayer:id/title desc= text=Rohn Audio @ (270,1213)
+2026-10-23 00:26:42  CAP lib-folder-tracks (79 nodes)

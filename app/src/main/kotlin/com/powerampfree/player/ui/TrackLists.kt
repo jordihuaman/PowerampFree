@@ -81,6 +81,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import java.io.File
@@ -111,44 +112,52 @@ import com.powerampfree.player.*
 
     @OptIn(ExperimentalFoundationApi::class)
     @Composable
-internal fun MainActivity.TrackListView(title: String, tracks: List<MediaTrack>, onOpenCtx: OpenCtx) {
+internal fun MainActivity.TrackListView(
+        title: String,
+        tracks: List<MediaTrack>,
+        onOpenCtx: OpenCtx,
+        onUp: (() -> Unit)? = null,
+    ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
         ) {
             item {
+                if (onUp != null) {
+                    PafBackPill("↑ Biblioteca", onUp)
+                }
+                Text(
+                    title,
+                    fontFamily = PafFamilyBold,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 26.sp,
+                    color = Paf.Text,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(title, style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "${tracks.size} pistas",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
+                    Text(
+                        "${tracks.size} pistas",
+                        fontFamily = PafFamily,
+                        fontSize = 13.sp,
+                        color = Paf.Text3,
+                        modifier = Modifier.weight(1f),
+                    )
+                    PafActionChip("Aleatorio", PafIconKind.Shuffle) {
+                        if (tracks.isNotEmpty()) {
+                            playTracks(tracks, kotlin.random.Random.nextInt(tracks.size))
+                        }
                     }
-                    OutlinedButton(onClick = { playTracks(tracks, 0) }) { Text("▶ Todo") }
+                    Spacer(Modifier.width(8.dp))
+                    PafActionChip("Todo", PafIconKind.Play) { playTracks(tracks, 0) }
                 }
             }
             itemsIndexed(tracks) { i, t ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .combinedClickable(
-                            onClick = { playTracks(tracks, i) },
-                            onLongClick = { onOpenCtx(t, tracks, i) },
-                        )
-                        .padding(vertical = 4.dp),
-                ) {
-                    Text(t.title, style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "${t.artist} — ${t.album}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
+                PafTrackRow(t, tracks, i, onOpenCtx)
             }
             item { Spacer(Modifier.height(24.dp)) }
         }

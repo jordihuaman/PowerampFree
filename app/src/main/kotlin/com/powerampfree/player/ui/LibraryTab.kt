@@ -108,6 +108,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import com.powerampfree.player.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.unit.sp
+import com.powerampfree.player.QueueBus
 
     // ------------------------------------------------------ library tab
 
@@ -123,7 +126,7 @@ internal enum class LibTop { ROOT, SONGS, ALBUMS, ARTISTS, GENRES, FOLDERS, PLAY
 
     /** Sort options for the folder explorer (List Options). */
 internal enum class ListSort(val label: String) {
-        TITLE("TÌtulo"), TRACK("N∫ pista"), DURATION("DuraciÛn"),
+        TITLE("TÔøΩtulo"), TRACK("NÔøΩ pista"), DURATION("DuraciÔøΩn"),
     }
 
 
@@ -159,6 +162,7 @@ internal fun MainActivity.folderTracksSorted(path: String, sort: ListSort): List
 internal fun MainActivity.LibraryTab(
         onSettings: () -> Unit = {},
         onOpenCtx: OpenCtx = { _, _, _ -> },
+        onQueue: () -> Unit = {},
         goto: NavRequest? = null,
         onGotoDone: () -> Unit = {},
     ) {
@@ -210,15 +214,15 @@ internal fun MainActivity.LibraryTab(
         }
 
         when {
-            detail != null -> TrackListView(detail!!.title, detail!!.tracks, onOpenCtx)
+            detail != null -> TrackListView(detail!!.title, detail!!.tracks, onOpenCtx, onUp = { detail = null })
             folderPath != null -> FolderScreen(
                 path = folderPath!!,
                 onNavigate = { folderPath = it },
                 onOpenCtx = onOpenCtx,
             )
-            top == LibTop.SONGS -> TrackListView("Todas las canciones", libraryOrEmpty, onOpenCtx)
+            top == LibTop.SONGS -> TrackListView("Todas las canciones", libraryOrEmpty, onOpenCtx, onUp = { top = LibTop.ROOT })
             top == LibTop.ALBUMS -> GroupListView(
-                "¡lbumes",
+                "ÔøΩlbumes",
                 albumRows(),
                 onOpen = { detail = it },
             )
@@ -230,7 +234,7 @@ internal fun MainActivity.LibraryTab(
             top == LibTop.FOLDERS -> GroupListView(
                 "Carpetas",
                 folderRows(),
-                onOpen = { g -> folderPath = if (g.subtitle == "(raÌz)") "" else g.subtitle },
+                onOpen = { g -> folderPath = if (g.subtitle == "(raÔøΩz)") "" else g.subtitle },
             )
             plName != null -> PlaylistScreen(
                 name = plName!!,
@@ -239,7 +243,7 @@ internal fun MainActivity.LibraryTab(
             )
             top == LibTop.PLAYLISTS -> PlaylistsScreen(onOpen = { plName = it })
             top == LibTop.GENRES -> GenresScreen(onOpen = { detail = it })
-            else -> LibraryRoot(onOpen = { top = it }, onSettings = onSettings)
+            else -> LibraryRoot(onOpen = { top = it }, onSettings = onSettings, onQueue = onQueue)
         }
     }
 
@@ -249,8 +253,8 @@ internal fun MainActivity.albumRows(): List<GroupRow> =
             .values
             .map { list ->
                 GroupRow(
-                    list.first().album.ifBlank { "Sin ·lbum" },
-                    list.first().artist.ifBlank { "" } + " ∑ ${list.size} pistas",
+                    list.first().album.ifBlank { "Sin ÔøΩlbum" },
+                    list.first().artist.ifBlank { "" } + " ÔøΩ ${list.size} pistas",
                     list.sortedBy { it.trackNo },
                 )
             }
@@ -266,123 +270,212 @@ internal fun MainActivity.artistRows(): List<GroupRow> =
 internal fun MainActivity.folderRows(): List<GroupRow> =
         libraryOrEmpty.groupBy { it.folder }
             .map { (f, list) ->
-                val display = f.trimEnd('/').substringAfterLast('/').ifBlank { "RaÌz" }
-                GroupRow(display, f.ifBlank { "(raÌz)" }, list)
+                val display = f.trimEnd('/').substringAfterLast('/').ifBlank { "RaÔøΩz" }
+                GroupRow(display, f.ifBlank { "(raÔøΩz)" }, list)
             }
             .sortedBy { it.title.lowercase() }
 
 
     @Composable
-internal fun MainActivity.LibraryRoot(onOpen: (LibTop) -> Unit, onSettings: () -> Unit) {
+internal fun MainActivity.LibraryRoot(
+        onOpen: (LibTop) -> Unit,
+        onSettings: () -> Unit,
+        onQueue: () -> Unit = {},
+    ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
             item {
-                Text("Biblioteca", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "${libraryOrEmpty.size} pistas en el sistema",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CategoryCard("??", "Canciones", libraryOrEmpty.size) { onOpen(LibTop.SONGS) }
-                    CategoryCard("??", "¡lbumes", albumRows().size) { onOpen(LibTop.ALBUMS) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CategoryCard("??", "Artistas", artistRows().size) { onOpen(LibTop.ARTISTS) }
-                    CategoryCard("??", "GÈneros", 0) { onOpen(LibTop.GENRES) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CategoryCard("??", "Carpetas", folderRows().size) { onOpen(LibTop.FOLDERS) }
-                    CategoryCard(
-                        "??", "Playlists",
-                        com.powerampfree.player.PlaylistStore.list(this@LibraryRoot).size,
-                    ) { onOpen(LibTop.PLAYLISTS) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CategoryCard("?", "Ajustes", 0) { onSettings() }
-                    CategoryCard("??", "Importar (SAF)", 0) { pickFolder.launch(null) }
-                }
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (libraryOrEmpty.isEmpty() &&
-                        ContextCompat.checkSelfPermission(
-                            this@LibraryRoot, Manifest.permission.READ_MEDIA_AUDIO,
-                        ) != PackageManager.PERMISSION_GRANTED
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Biblioteca",
+                            fontFamily = PafFamilyBold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 30.sp,
+                            color = Paf.Text,
+                        )
+                        Text(
+                            "${libraryOrEmpty.size} pistas en el sistema",
+                            fontFamily = PafFamily,
+                            fontSize = 12.sp,
+                            color = Paf.Text3,
+                        )
+                    }
+                    // overflow en c√≠rculo (abre ajustes, UI_SPEC ¬ß4.1)
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(Paf.Surf3, CircleShape)
+                            .clickable(onClick = onSettings),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Button(onClick = {
+                        Text("‚ãÆ", color = Paf.Text, fontSize = 22.sp)
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                if (libraryOrEmpty.isEmpty() &&
+                    ContextCompat.checkSelfPermission(
+                        this@LibraryRoot, Manifest.permission.READ_MEDIA_AUDIO,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    Row {
+                        PafActionChip("Conceder permiso de audio") {
                             askAudioPermission.launch(Manifest.permission.READ_MEDIA_AUDIO)
-                        }) { Text("Conceder permiso de audio") }
-                    } else {
-                        OutlinedButton(onClick = {
-                            libraryOrEmpty = MediaStoreLibrary.query(this@LibraryRoot)
-                        }) { Text("Recargar biblioteca") }
+                        }
                     }
                 }
             }
-        }
-    }
-
-
-    @Composable
-internal fun RowScope.CategoryCard(glyph: String, title: String, count: Int, onClick: () -> Unit) {
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .height(86.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable(onClick = onClick)
-                .padding(10.dp),
-        ) {
-            Column {
-                Text(glyph, style = MaterialTheme.typography.titleMedium)
-                Text(title, style = MaterialTheme.typography.bodyMedium)
-                if (count > 0) {
-                    Text(
-                        "$count",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
+            item {
+                PafCateRow(
+                    Paf.CatAllSongs, PafIconKind.QueueList, "Canciones",
+                    if (libraryOrEmpty.isEmpty()) "" else "${libraryOrEmpty.size}",
+                ) { onOpen(LibTop.SONGS) }
+            }
+            item {
+                PafCateRow(
+                    Paf.CatFolders, PafIconKind.Folder, "Carpetas",
+                    if (folderRows().isEmpty()) "" else "${folderRows().size}",
+                ) { onOpen(LibTop.FOLDERS) }
+            }
+            item {
+                PafCateRow(
+                    Paf.CatYears, PafIconKind.Grid, "√Ålbumes",
+                    if (albumRows().isEmpty()) "" else "${albumRows().size}",
+                ) { onOpen(LibTop.ALBUMS) }
+            }
+            item {
+                PafCateRow(
+                    Paf.CatComposer, PafIconKind.Person, "Artistas",
+                    if (artistRows().isEmpty()) "" else "${artistRows().size}",
+                ) { onOpen(LibTop.ARTISTS) }
+            }
+            item {
+                PafCateRow(
+                    Paf.CatGenres, PafIconKind.Bars, "G√©neros", "",
+                ) { onOpen(LibTop.GENRES) }
+            }
+            item {
+                val plCount = PlaylistStore.list(this@LibraryRoot).size
+                PafCateRow(
+                    Paf.CatPlaylist, PafIconKind.QueueList, "Playlists",
+                    if (plCount == 0) "" else "$plCount",
+                ) { onOpen(LibTop.PLAYLISTS) }
+            }
+            item {
+                val qCount = QueueBus.tracks.size
+                PafCateRow(
+                    Paf.CatQueue, PafIconKind.QueueList, "Cola",
+                    if (qCount == 0) "vac√≠a" else "$qCount pistas",
+                ) { onQueue() }
+            }
+            item {
+                PafCateRow(
+                    Paf.CatQueue, PafIconKind.Gear, "Ajustes", "",
+                ) { onSettings() }
+            }
+            item {
+                PafCateRow(
+                    Paf.CatQueue, PafIconKind.Down, "Importar (SAF)", "",
+                ) { pickFolder.launch(null) }
+            }
+            item {
+                if (libraryOrEmpty.isNotEmpty()) {
+                    Row(modifier = Modifier.padding(vertical = 10.dp)) {
+                        PafActionChip("Recargar biblioteca") {
+                            libraryOrEmpty = MediaStoreLibrary.query(this@LibraryRoot)
+                        }
+                    }
                 }
+                Spacer(Modifier.height(20.dp))
             }
         }
     }
 
 
     @Composable
-internal fun MainActivity.GroupListView(title: String, rows: List<GroupRow>, onOpen: (GroupRow) -> Unit) {  LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+internal fun MainActivity.GroupListView(title: String, rows: List<GroupRow>, onOpen: (GroupRow) -> Unit) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
         ) {
             item {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-            }
-            itemsIndexed(rows) { _, g ->
-                Column(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable { onOpen(g) }
-                        .padding(10.dp),
+                        .padding(top = 8.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(g.title, style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        g.subtitle,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            title,
+                            fontFamily = PafFamilyBold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 26.sp,
+                            color = Paf.Text,
+                            maxLines = 1,
+                        )
+                        Text(
+                            "${rows.size}",
+                            fontFamily = PafFamily,
+                            fontSize = 13.sp,
+                            color = Paf.Text3,
+                        )
+                    }
                 }
             }
+            itemsIndexed(rows) { _, g ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(64.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onOpen(g) }
+                        .padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(Paf.Surf3, RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PafIcon(
+                            if (title.contains("Artist")) PafIconKind.Person else PafIconKind.Grid,
+                            Paf.Text2,
+                            22.dp,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            g.title,
+                            fontFamily = PafFamilyBold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp,
+                            color = Paf.Text,
+                            maxLines = 1,
+                        )
+                        if (g.subtitle.isNotBlank()) {
+                            Text(
+                                g.subtitle,
+                                fontFamily = PafFamily,
+                                fontSize = 13.sp,
+                                color = Paf.Text3,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+            item { Spacer(Modifier.height(20.dp)) }
         }
     }
-
-
     @Composable
 internal fun MainActivity.GenresScreen(onOpen: (GroupRow) -> Unit) {
         var rows by remember(libraryOrEmpty) { mutableStateOf<List<GroupRow>?>(null) }
@@ -400,23 +493,23 @@ internal fun MainActivity.GenresScreen(onOpen: (GroupRow) -> Unit) {
                 modifier = Modifier.fillMaxSize().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("GÈneros", style = MaterialTheme.typography.titleMedium)
-                Text("CargandoÖ", style = MaterialTheme.typography.bodySmall)
+                Text("GÔøΩneros", style = MaterialTheme.typography.titleMedium)
+                Text("CargandoÔøΩ", style = MaterialTheme.typography.bodySmall)
             }
         } else if (current.isEmpty()) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("GÈneros", style = MaterialTheme.typography.titleMedium)
+                Text("GÔøΩneros", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "No hay gÈneros en la biblioteca del sistema.",
+                    "No hay gÔøΩneros en la biblioteca del sistema.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
             }
         } else {
-            GroupListView("GÈneros", current, onOpen)
+            GroupListView("GÔøΩneros", current, onOpen)
         }
     }
 
@@ -447,132 +540,136 @@ internal fun MainActivity.FolderScreen(
         }
         val totalMs = subtree.sumOf { it.durationMs }
 
-        Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-            // ---- breadcrumb + header
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+            // ---- breadcrumb + header (UI_SPEC ¬ß4.2)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.material3.TextButton(onClick = { onNavigate(parentFolder(path)) }) {
-                    Text("?")
+                PafBackPill(
+                    "‚Üë " + (parentFolder(path).trimEnd('/').substringAfterLast('/').ifEmpty { "Carpetas" }),
+                ) { onNavigate(parentFolder(path)) }
+            }
+            Row(
+                modifier = Modifier.padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(Paf.CatFolders, RoundedCornerShape(14.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    PafIcon(PafIconKind.Folder, Paf.Text, 24.dp)
                 }
+                Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         path.trimEnd('/').ifEmpty { "Dispositivo" },
-                        style = MaterialTheme.typography.titleMedium,
+                        fontFamily = PafFamilyBold,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 22.sp,
+                        color = Paf.Text,
                         maxLines = 1,
                     )
                     Text(
-                        "${subtree.size} pistas ∑ ${fmtDur(totalMs)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        "${subtree.size} | ${fmtDur(totalMs)}",
+                        fontFamily = PafFamily,
+                        fontSize = 13.sp,
+                        color = Paf.Text3,
                     )
                 }
-                androidx.compose.material3.TextButton(onClick = { showSort = true }) { Text("?") }
             }
-            // ---- actions row (header options)
+            Spacer(Modifier.height(10.dp))
+            // ---- chips de acci√≥n
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedButton(onClick = { if (tracks.isNotEmpty()) playTracks(tracks, 0) }) {
-                    Text("? Todo")
-                }
-                OutlinedButton(onClick = {
+                PafActionChip("Aleatorio", PafIconKind.Shuffle) {
                     if (tracks.isNotEmpty()) {
                         playTracks(tracks, kotlin.random.Random.nextInt(tracks.size))
                     }
-                }) { Text("??") }
-                OutlinedButton(onClick = {
+                }
+                PafActionChip("Todo", PafIconKind.Play) {
+                    if (tracks.isNotEmpty()) playTracks(tracks, 0)
+                }
+                PafActionChip(
+                    if (selecting) "Salir" else "Select",
+                    active = selecting,
+                ) {
                     selecting = !selecting
                     if (!selecting) selected.clear()
-                }) { Text(if (selecting) "? Salir" else "? Select") }
+                }
+                PafActionChip("Ordenar") { showSort = true }
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                if (path.isNotEmpty()) {
-                    itemsIndexed(listOf(parentFolder(path))) { _, parent ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onNavigate(parent) }
-                                .padding(vertical = 4.dp),
-                        ) {
-                            Text("?? Ö", style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
                 itemsIndexed(subs) { _, sub ->
                     val direct = libraryOrEmpty.count { it.folder == sub }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .height(56.dp)
+                            .clip(RoundedCornerShape(12.dp))
                             .clickable { onNavigate(sub) }
-                            .padding(vertical = 4.dp),
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(Paf.Surf3, RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            PafIcon(PafIconKind.Folder, Paf.Text2, 20.dp)
+                        }
+                        Spacer(Modifier.width(12.dp))
                         Column {
                             Text(
                                 sub.trimEnd('/').substringAfterLast('/'),
-                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = PafFamilyBold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = Paf.Text,
+                                maxLines = 1,
                             )
                             Text(
                                 "$direct pistas",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.outline,
+                                fontFamily = PafFamily,
+                                fontSize = 12.sp,
+                                color = Paf.Text3,
                             )
                         }
                     }
                 }
                 itemsIndexed(tracks) { i, t ->
                     val isSel = t.uri in selected
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                onClick = {
-                                    if (selecting) {
-                                        if (isSel) selected.remove(t.uri) else selected.add(t.uri)
-                                    } else {
-                                        playTracks(tracks, i)
-                                    }
-                                },
-                                onLongClick = { onOpenCtx(t, tracks, i) },
-                            )
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (selecting) {
-                            Text(
-                                if (isSel) "?" else "?",
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(end = 6.dp),
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(t.title, style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                t.artist,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.outline,
-                            )
-                        }
-                        Text(
-                            fmtDur(t.durationMs),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
+                    PafTrackRow(
+                        track = t,
+                        tracks = tracks,
+                        index = i,
+                        onOpenCtx = onOpenCtx,
+                        selecting = selecting,
+                        selected = isSel,
+                        onSelectToggle = {
+                            if (isSel) selected.remove(t.uri) else selected.add(t.uri)
+                        },
+                    )
                 }
                 item { Spacer(Modifier.height(12.dp)) }
             }
             if (selecting) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(onClick = {
+                    PafActionChip("Reproducir (${selected.size})") {
                         val selTracks = tracks.filter { it.uri in selected }
                         if (selTracks.isNotEmpty()) playTracks(selTracks, 0)
-                    }) { Text("? ${selected.size}") }
-                    OutlinedButton(onClick = {
+                    }
+                    PafActionChip(
+                        "Todos ${tracks.size}",
+                    ) {
                         selected.clear()
                         tracks.forEach { selected.add(it.uri) }
-                    }) { Text("Todos") }
-                    OutlinedButton(onClick = { selected.clear() }) { Text("Ninguno") }
+                    }
+                    PafActionChip(
+                        "Ninguno",
+                    ) { selected.clear() }
                 }
             }
         }
@@ -589,7 +686,7 @@ internal fun MainActivity.FolderScreen(
                                 showSort = false
                             }) {
                                 Text(
-                                    s.label + if (sort == s) "  ?" else "",
+                                    s.label + if (sort == s) "  ‚úì" else "",
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
                             }

@@ -233,13 +233,9 @@ class MainActivity : ComponentActivity() {
 
     // ------------------------------------------------------------------ UI
 
-    private enum class PafTab(val glyph: String, val label: String) {
-        PLAYER("▶", "Reprod."),
-        LIBRARY("📚", "Biblio."),
-        EQ("🎚", "EQ"),
-        SEARCH("🔍", "Buscar"),
-        QUEUE("📋", "Cola"),
-    }
+    // PafTab + iconos viven en ui/BottomBar.kt: enum interno compartido
+    // (LIBRARY/EQ/SEARCH/MENU en la barra; PLAYER/QUEUE se abren por
+    // mini-player y hoja del menú, igual que la referencia).
 
     @Composable
     private fun PafApp() {
@@ -268,12 +264,17 @@ class MainActivity : ComponentActivity() {
         var tab by remember {
             mutableStateOf(if (startAtLibrary) PafTab.LIBRARY else PafTab.PLAYER)
         }
-
-        val darkTheme = when (themeMode) {
-            AppearanceStore.MODE_LIGHT -> false
-            AppearanceStore.MODE_DARK -> true
-            else -> isSystemInDarkTheme()
+        var menuAbout by remember { mutableStateOf(false) }
+        // Atrás desde player/cola/menú → biblioteca (como la referencia: el
+        // mini-player y la cola son vistas, no pestañas raíz).
+        BackHandler(
+            enabled = (tab == PafTab.PLAYER || tab == PafTab.QUEUE || tab == PafTab.MENU) &&
+                !settingsOpen && ctxTrack == null && plTrack == null &&
+                lyricsTrack == null && !menuAbout,
+        ) {
+            tab = PafTab.LIBRARY
         }
+
         val openLyrics: (PlayerSnapshot) -> Unit = { s ->
             val dur = controller?.duration ?: 0L
             lyricsTrack = MediaTrack(
@@ -284,31 +285,12 @@ class MainActivity : ComponentActivity() {
                 durationMs = if (dur > 0) dur else 0L,
             )
         }
-        val baseScheme = if (darkTheme) darkColorScheme() else lightColorScheme()
-        val scheme =
-            if (accentColor != null) baseScheme.copy(primary = Color(accentColor!!)) else baseScheme
-        val typography = if (boldFont) {
-            val t = MaterialTheme.typography
-            t.copy(
-                displayLarge = t.displayLarge.copy(fontWeight = FontWeight.Bold),
-                displayMedium = t.displayMedium.copy(fontWeight = FontWeight.Bold),
-                displaySmall = t.displaySmall.copy(fontWeight = FontWeight.Bold),
-                headlineLarge = t.headlineLarge.copy(fontWeight = FontWeight.Bold),
-                headlineMedium = t.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                headlineSmall = t.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                titleLarge = t.titleLarge.copy(fontWeight = FontWeight.Bold),
-                titleMedium = t.titleMedium.copy(fontWeight = FontWeight.Bold),
-                titleSmall = t.titleSmall.copy(fontWeight = FontWeight.Bold),
-                bodyLarge = t.bodyLarge.copy(fontWeight = FontWeight.Bold),
-                bodyMedium = t.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                bodySmall = t.bodySmall.copy(fontWeight = FontWeight.Bold),
-                labelLarge = t.labelLarge.copy(fontWeight = FontWeight.Bold),
-                labelMedium = t.labelMedium.copy(fontWeight = FontWeight.Bold),
-                labelSmall = t.labelSmall.copy(fontWeight = FontWeight.Bold),
-            )
-        } else {
-            MaterialTheme.typography
-        }
+        // Look Poweramp (UI_SPEC §1): negro puro + superficies grises + familia
+        // condensada. Los ajustes L&F siguen cableados (accent, bold); la
+        // referencia observada no tiene modo claro, así que el esquema es
+        // siempre el oscuro medido.
+        val scheme = pafScheme(accentColor)
+        val typography = pafTypography(MaterialTheme.typography, boldFont)
 
         MaterialTheme(colorScheme = scheme, typography = typography) {
             // Edge-to-edge on MIUI: the content must clear the status bar or the
@@ -316,6 +298,7 @@ class MainActivity : ComponentActivity() {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(Paf.Bg)
                     .windowInsetsPadding(WindowInsets.statusBars),
             ) {
                 Box(modifier = Modifier.weight(1f)) {
@@ -328,12 +311,37 @@ class MainActivity : ComponentActivity() {
                         PafTab.LIBRARY -> LibraryTab(
                             onSettings = { settingsOpen = true },
                             onOpenCtx = openCtx,
+                            onQueue = { tab = PafTab.QUEUE },
                             goto = gotoNav,
                             onGotoDone = { gotoNav = null },
                         )
                         PafTab.EQ -> EqTab()
                         PafTab.SEARCH -> SearchTab(onOpenCtx = openCtx)
                         PafTab.QUEUE -> QueueTab(snap, onOpenCtx = openCtx)
+                        PafTab.MENU -> {
+                            if (menuAbout) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Paf.Bg)
+                                        .clickable { menuAbout = false }
+                                        .padding(16.dp),
+                                ) {
+                                    BackHandler { menuAbout = false }
+                                    AboutScreen()
+                                }
+                            } else {
+                                MainMenuSheet(
+                                    onClose = { tab = PafTab.LIBRARY },
+                                    onSettings = {
+                                        tab = PafTab.LIBRARY
+                                        settingsOpen = true
+                                    },
+                                    onQueue = { tab = PafTab.QUEUE },
+                                    onAbout = { menuAbout = true },
+                                )
+                            }
+                        }
                     }
 
                     // Overlays INSIDE the content box (proven pattern: sibling
@@ -418,19 +426,17 @@ class MainActivity : ComponentActivity() {
                     )
                     }
                     }
-                if (tab != PafTab.PLAYER && !settingsOpen) {
-                    MiniPlayerBar(snap, onOpen = { tab = PafTab.PLAYER })
-                }
-                NavigationBar {
-                    PafTab.values().forEach { t ->
-                        NavigationBarItem(
-                            selected = tab == t,
-                            onClick = { tab = t },
-                            icon = { Text(t.glyph, style = MaterialTheme.typography.titleMedium) },
-                            label = { Text(t.label, style = MaterialTheme.typography.labelSmall) },
-                        )
-                    }
-                }
+                // Barra pastilla de 4 tabs (UI_SPEC §2). PLAYER no es tab:
+                // se abre tocando el mini-player; Cola desde el menú.
+                PafBottomBar(
+                    tab = if (menuAbout) PafTab.MENU else tab,
+                    onTab = { t ->
+                        tab = if (tab == PafTab.MENU && t == PafTab.MENU) PafTab.LIBRARY else t
+                    },
+                    tabOnly = tab == PafTab.PLAYER || settingsOpen,
+                    snap = snap,
+                    onOpenPlayer = { tab = PafTab.PLAYER },
+                )
             }
         }
     }
