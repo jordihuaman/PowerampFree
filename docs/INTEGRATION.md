@@ -26,6 +26,18 @@ clean-room. How the reference engine (see `EVIDENCE.md`) maps to our code.
         + SpectrumAnalyzer / LrcParser / policies / ShuffleOps
 ```
 
+## Code map (app: `com.powerampfree.player`)
+
+| Area | Files |
+|---|---|
+| Activity glue | `MainActivity.kt` – controller wiring, permission, routing |
+| UI (extension `MainActivity.X()` composables) | `ui/` – `Transport` (snapshot+commands), `Common`, `PlayerTab`, `EqTab`, `LibraryTab`, `Playlists`, `TrackLists`, `SearchQueue`, `Lyrics`, `Settings`, `SettingsAudio`, `SettingsMedia` |
+| Service state + hooks | `PlaybackService.kt` – beams, orchestrator state, service lifecycle |
+| Service behavior (extensions) | `service/` – `Orchestrator` (dual-beam advance/skip/fades), `QueuePersistence` (snapshot/restore), `SessionCallback` (Media3 API), `FocusHeadset` (focus + wired/BT routing), `PlayerListener` (ExoPlayer events), `Common` (tags/futures) |
+| DSP bridge | `DspAudioProcessor.kt` → `:core:audio DspChain` |
+| Stores / settings | `PresetStore.kt`, `PlaybackSettings.kt`, `QueueStore.kt`, `TrackStateStore.kt`, `AudioSettings.kt`, `LibrarySettings.kt` |
+| Loader / buses | `LibraryLoader.kt` (MediaStore+SAF), `QueueBus.kt`, `FormatBus.kt`, `VisualizerTap` |
+
 ## External API (broadcast commands)
 
 Action: `com.powerampfree.player.API_COMMAND`, own namespaced extras:

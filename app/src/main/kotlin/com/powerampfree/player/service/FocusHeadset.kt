@@ -7,7 +7,6 @@ import com.powerampfree.audio.focus.FocusChange
 import com.powerampfree.audio.focus.FocusPolicy
 import com.powerampfree.audio.focus.FocusToggles
 import com.powerampfree.audio.input.HeadsetAction
-import com.powerampfree.audio.input.HeadsetGestures
 import com.powerampfree.player.AudioSettings
 import com.powerampfree.player.PlaybackService
 import com.powerampfree.player.PlaybackService.Companion.BT_A2DP_CONNECTION_CHANGED
