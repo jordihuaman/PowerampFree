@@ -75,7 +75,7 @@ data class MediaTrack(
                     .apply {
                         // Album art of the system library travels in metadata:
                         // notification / lockscreen / session consumers obtain
-                        // it without extra code (sprint 8).
+                        // it without extra code.
                         if (albumId >= 0) {
                             setArtworkUri(AlbumArtLoader.artUri(albumId))
                         }

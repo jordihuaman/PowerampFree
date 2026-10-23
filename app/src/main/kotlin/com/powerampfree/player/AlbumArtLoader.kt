@@ -10,7 +10,7 @@ import android.util.LruCache
 import java.io.InputStream
 
 /**
- * Album art resolver (blocks 12/13, sprint 8).
+ * Album art resolver (blocks 12/13).
  *
  * Search order:
  *  1. MediaStore album art by `albumId` via the system albumart provider

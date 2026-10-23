@@ -7,13 +7,13 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Saved playlists (sprint 10 — block 4 "Add to Playlist" + block 6 lists).
+ * Saved playlists (block 4 "Add to Playlist" + block 6 lists).
  *
  * One JSON file per playlist under `filesDir/playlists/<file>.json` — the
  * same layout as EQ presets — so create/rename/delete is file-level and each
  * list only rewrites on edit. Entries snapshot the `MediaTrack` fields the
- * queue needs (incl. `albId`/`dir`/`trk` for art + ordering, the lesson from
- * sprint 8) plus `at` (added-at) for stable ordering of additions.
+ * queue needs (incl. `albId`/`dir`/`trk` for art + ordering) plus `at`
+ * (added-at) for stable ordering of additions.
  *
  * File schema:
  * ```json

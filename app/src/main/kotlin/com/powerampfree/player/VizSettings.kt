@@ -3,7 +3,7 @@ package com.powerampfree.player
 import android.content.Context
 
 /**
- * Visualization settings (sprint 10 — block 14 núcleo).
+ * Visualization settings (block 14 núcleo).
  *
  * Own prefs file so Export/Import carries it. Read live (cheap cached-prefs
  * reads inside the 50 ms spectrum poll) so the player/EQ screens react

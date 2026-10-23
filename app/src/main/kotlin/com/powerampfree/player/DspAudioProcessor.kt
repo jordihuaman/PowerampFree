@@ -188,7 +188,7 @@ class DspAudioProcessor(private val appContext: Context) : BaseAudioProcessor() 
     }
 
     /**
-     * Live Replay Gain trim (sprint 7): the EQ preamp is owned by [applyPreset],
+     * Live Replay Gain trim: the EQ preamp is owned by [applyPreset],
      * this is the separate RG term so both stack independently in GainStage.
      */
     fun setReplayGain(db: Float) {

@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Per-track state (block 11, sprint 9): remembered playhead positions
+ * Per-track state (block 11): remembered playhead positions
  * (podcasts / long sets) and played stats (count + last played), persisted to
  * `filesDir/track_state.json` after `QueueStore`'s style:
  * writes happen on the main thread upon transitions/ticks, the file is small

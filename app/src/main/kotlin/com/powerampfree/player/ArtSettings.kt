@@ -3,7 +3,7 @@ package com.powerampfree.player
 import android.content.Context
 
 /**
- * Album art + background settings (blocks 12/13, sprint 8).
+ * Album art + background settings (blocks 12/13).
  *
  * Own prefs file so Export/Import carries it; plain booleans/ints survive the
  * org.json round-trip (no numeric-narrowing class involved). Read live by the

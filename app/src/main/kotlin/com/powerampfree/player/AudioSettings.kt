@@ -3,7 +3,7 @@ package com.powerampfree.player
 import android.content.Context
 
 /**
- * Audio + headset settings (blocks 8 & 10, sprint 7).
+ * Audio + headset settings (blocks 8 & 10).
  *
  * Persisted in their own prefs file so the existing export/import (which walks
  * a list of prefs names) carries them along. Values are read live by the

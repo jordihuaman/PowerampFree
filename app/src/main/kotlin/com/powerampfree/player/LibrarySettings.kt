@@ -3,7 +3,7 @@ package com.powerampfree.player
 import android.content.Context
 
 /**
- * Library settings (block 11, sprint 9).
+ * Library settings (block 11).
  *
  * Own prefs file so Export/Import carries it; plain booleans/ints survive the
  * org.json round-trip. Read live by the service (progress/count thresholds)
