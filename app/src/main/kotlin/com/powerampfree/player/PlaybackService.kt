@@ -915,7 +915,6 @@ class PlaybackService : MediaSessionService() {
         // Advancement is driven by the orchestrator on natural track ends and
         // through the app UI; native mode keeps Media3's full queue behavior.
     }
-    private fun skipNextUnused() = Unit
 
     // --------------------------------------------------- audio focus (8)
 

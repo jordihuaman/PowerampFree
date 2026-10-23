@@ -107,9 +107,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.currentCoroutineContext
 
 /**
  * UI del reproductor — navegación de 5 tabs con mini-player persistente
