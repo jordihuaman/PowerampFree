@@ -1,12 +1,20 @@
+# Build outputs
 .gradle/
 build/
 app/build/
-extract/so/
+.kotlin/
+
+# Runtime/tools (vendored locally, never committed)
 tools/gradle/
 tools/jdk/
 tools/*.zip
 tools/jadx-headless-mcp-*.jar
 targets/
+
+# IDE / local config
 .idea/
 *.iml
 local.properties
+
+# REA/jadx analysis artifacts (see docs/EVIDENCE.md for the findings summary)
+extract/
