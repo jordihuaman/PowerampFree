@@ -4,34 +4,38 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.common.audio.AudioProcessor as M3AudioProcessor
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
-import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
-import androidx.media3.session.SessionCommand
-import androidx.media3.session.SessionResult
-import com.google.common.util.concurrent.ListenableFuture
 import com.powerampfree.audio.engine.AutoAdvanceEngine
-import com.powerampfree.audio.focus.FocusAction
-import com.powerampfree.audio.focus.FocusChange
-import com.powerampfree.audio.focus.FocusPolicy
-import com.powerampfree.audio.focus.FocusToggles
-import com.powerampfree.audio.input.HeadsetAction
 import com.powerampfree.audio.input.HeadsetGestures
-import com.powerampfree.audio.library.CountAsPlayedPolicy
-import com.powerampfree.audio.library.TrackProgressPolicy
-import com.powerampfree.audio.util.ShuffleOps
-import java.util.concurrent.Executor
-import java.util.concurrent.TimeUnit
+import com.powerampfree.player.service.abandonAudioFocus
+import com.powerampfree.player.service.advanceOrchestrator
+import com.powerampfree.player.service.buildSessionCallback
+import com.powerampfree.player.service.cancelPendingFadeFinish
+import com.powerampfree.player.service.dispatchGesture
+import com.powerampfree.player.service.enginePause
+import com.powerampfree.player.service.enginePlay
+import com.powerampfree.player.service.fadeWatcher
+import com.powerampfree.player.service.finishFade
+import com.powerampfree.player.service.handleFocusChange
+import com.powerampfree.player.service.makeListener
+import com.powerampfree.player.service.registerHeadsetReceivers
+import com.powerampfree.player.service.restoreQueue
+import com.powerampfree.player.service.saveListeningProgress
+import com.powerampfree.player.service.saveQueueSnapshot
+import com.powerampfree.player.service.stopSaveTicker
+import com.powerampfree.player.service.TAG
+import com.powerampfree.player.service.unregisterHeadsetReceivers
+import com.powerampfree.player.service.WATCHER_PERIOD_MS
 
 /**
  * Foreground playback service with TWO advance engines:
@@ -55,35 +59,41 @@ import java.util.concurrent.TimeUnit
  *
  * Queue lifecycle: persisted via [QueueStore]; restore is paused. EQ applies
  * live via `SET_PRESET`; crossfade length via `SET_CROSSFADE` (own API).
+ *
+ * The behavior lives in extension functions under `player/service/`:
+ * `Orchestrator` (dual-beam advancement), `QueuePersistence` (snapshot +
+ * restore), `SessionCallback` (Media3 command surface), `FocusHeadset`
+ * (audio focus + headset routing) and `PlayerListener` (ExoPlayer events).
  */
 class PlaybackService : MediaSessionService() {
 
-    private var mediaSession: MediaSession? = null
-    private var primary: ExoBeam = ExoBeam.empty()
-    private var overlay: ExoBeam? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
+    internal var mediaSession: MediaSession? = null
+    internal var primary: ExoBeam = ExoBeam.empty()
+    internal var overlay: ExoBeam? = null
+    internal val mainHandler = Handler(Looper.getMainLooper())
 
     // ---- dual-decoder orchestrator state -----------------------------------
-    private var queueTracks: List<MediaTrack> = emptyList()
-    private var queueIndex = -1
-    private var fadeActive = false
+    internal var queueTracks: List<MediaTrack> = emptyList()
+    internal var queueIndex = -1
+    internal var fadeActive = false
+    internal var plannedRealDurationMs = -1L
 
-    private val crossfadeMs: Long
+    internal val crossfadeMs: Long
         get() = PlaybackSettings.crossfadeMs(applicationContext)
-    private val dualMode: Boolean
+    internal val dualMode: Boolean
         get() = crossfadeMs > 0
 
     // ---- repeat / shuffle (player screen) ----------------------------------
-    private val repeatMode: String
+    internal val repeatMode: String
         get() = PlaybackSettings.repeatMode(applicationContext)
-    private val isRepeatOne: Boolean
+    internal val isRepeatOne: Boolean
         get() = repeatMode == PlaybackSettings.REPEAT_ONE
-    private val isRepeatAll: Boolean
+    internal val isRepeatAll: Boolean
         get() = repeatMode == PlaybackSettings.REPEAT_ALL
-    private val shuffleOn: Boolean
+    internal val shuffleOn: Boolean
         get() = PlaybackSettings.shuffleEnabled(applicationContext)
 
-    private fun applyNativePlayerFlags(p: androidx.media3.common.Player?) {
+    internal fun applyNativePlayerFlags(p: androidx.media3.common.Player?) {
         p ?: return
         p.repeatMode = when (repeatMode) {
             PlaybackSettings.REPEAT_ONE -> Player.REPEAT_MODE_ONE
@@ -95,14 +105,14 @@ class PlaybackService : MediaSessionService() {
 
     /** Dual beams carry a single item: replay-one loops natively, ALL wraps in
      *  the orchestrator ([advanceOrchestrator]), so the beam must not loop. */
-    private fun applyDualBeamFlags(p: androidx.media3.common.Player?) {
+    internal fun applyDualBeamFlags(p: androidx.media3.common.Player?) {
         p ?: return
         p.repeatMode = if (isRepeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         p.shuffleModeEnabled = false
     }
 
     /** One decodable audio slot: its own player + DSP processor + listener. */
-    private class ExoBeam(val player: ExoPlayer?, val dsp: DspAudioProcessor?) {
+    internal class ExoBeam(val player: ExoPlayer?, val dsp: DspAudioProcessor?) {
         fun release() {
             player?.release()
         }
@@ -112,10 +122,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     // session ids for the engine: 1-based queue index (dual) / player index (native)
-    private fun currentSid(): Long = sidOf(currentIndex())
-    private fun currentIndex(): Int =
+    internal fun currentSid(): Long = sidOf(currentIndex())
+    internal fun currentIndex(): Int =
         if (dualMode) queueIndex else (primary.player?.currentMediaItemIndex ?: 0)
-    private fun sidOf(i: Int): Long = i.toLong() + 1L
+    internal fun sidOf(i: Int): Long = i.toLong() + 1L
 
     private val advanceListener = object : AutoAdvanceEngine.Listener {
         override fun onAdvanceNeeded(currentSession: Long) {
@@ -129,11 +139,11 @@ class PlaybackService : MediaSessionService() {
         override fun onPendingPromoted(newCurrentSession: Long) = Unit
         override fun onPipelineIdle() = stopSaveTicker()
     }
-    private lateinit var advanceEngine: AutoAdvanceEngine
+    internal lateinit var advanceEngine: AutoAdvanceEngine
 
     // -------------------------------------------------------- player slots
 
-    private fun buildBeam(withFocus: Boolean): ExoBeam {
+    internal fun buildBeam(withFocus: Boolean): ExoBeam {
         val dsp = DspAudioProcessor(applicationContext)
         val factory = object : DefaultRenderersFactory(this) {
             override fun buildAudioSink(
@@ -160,448 +170,33 @@ class PlaybackService : MediaSessionService() {
         return ExoBeam(player, dsp)
     }
 
-    /**
-     * Listener factory (one per player): only the session player drives
-     * engine/queue continuity; the overlay decoder's events are handled by the
-     * orchestrator ([startOverlap]/[finishFade]), not here.
-     */
-    private fun makeListener(self: ExoPlayer): Player.Listener = object : Player.Listener {
+    // ----------------------------------------------------- focus/headset state
 
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            if (self !== primary.player) return
-            if (fadeActive && dualMode) {
-                // Outgoing decoder crossed the seam: hold it silent; also kill
-                // its own native auto-advance so duplicate audio never plays.
-                self.pause()
-                return
-            }
-            if (!dualMode) {
-                val idx = self.currentMediaItemIndex
-                advanceEngine.pendingTrackOpened(sidOf(idx))
-                if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
-                    advanceEngine.dspTrackStarted(sidOf(idx))
-                }
-            }
-            saveQueueSnapshot()
+    internal var audioManager: android.media.AudioManager? = null
+    internal var focusRequest: android.media.AudioFocusRequest? = null
+    internal var haveFocus = false
+    /** True only when WE paused due to a focus loss (a user pause never sets it). */
+    internal var focusPaused = false
+    internal var focusDucked = false
+
+    internal val focusListener =
+        android.media.AudioManager.OnAudioFocusChangeListener { change ->
+            handleFocusChange(change)
         }
 
-        override fun onPlaybackStateChanged(playbackState: Int) {
-            if (self !== primary.player) return
-            when {
-                playbackState == Player.STATE_ENDED && dualMode -> {
-                    // Overlay was not armed in time (unknown durations etc.):
-                    // switch without fade so playback never stalls.
-                    advanceOrchestrator()
-                }
-                playbackState == Player.STATE_ENDED && !dualMode -> {
-                    commitTrackState() // single mode natural end (pos == dur)
-                    advanceEngine.dspTrackEnded(currentSid())
-                }
-            }
-        }
+    internal val gestures = HeadsetGestures()
+    internal var wiredConnected = false
+    internal var btConnected = false
+    internal var plugInitialized = false
 
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (self !== primary.player) return
-            if (isPlaying) {
-                advanceEngine.dspTrackStarted(currentSid())
-                startSaveTicker()
-                // refresh fade plan against the live clock after stream resume
-                planPrimaryCrossfade()
-                // Hold audio focus while playing (block 8); clears a focus pause.
-                ensureAudioFocus()
-                focusPaused = false
-            } else {
-                stopSaveTicker()
-                saveQueueSnapshot()
-                saveListeningProgress() // block 11: pause keeps the playhead
-                // Freeze the whole mix on user pause: the overlay halts too.
-                if (fadeActive) overlay?.player?.pause()
-                // Release focus on a user pause/end, but keep it across a
-                // focus-induced pause so the later GAIN can resume.
-                if (!focusPaused) abandonAudioFocus()
-            }
-        }
+    internal val gestureResolve = Runnable { dispatchGesture(gestures.onResolveWindow()) }
+    internal val gestureLong = Runnable { dispatchGesture(gestures.onLongElapsed()) }
 
-        override fun onPositionDiscontinuity(
-            oldPosition: Player.PositionInfo,
-            newPosition: Player.PositionInfo,
-            reason: Int,
-        ) {
-            if (self !== primary.player) return
-            val itemIndex = if (dualMode) 0 else self.currentMediaItemIndex
-            primary.dsp?.snapCrossfade(itemIndex, newPosition.positionMs)
-        }
+    /** Narrow identity for `finishFade`: [cancelPendingFadeFinish] removes the
+     *  exact instance posted by [startOverlap], so it must be a stable object. */
+    internal val finishFadeRunnable = Runnable { finishFade() }
 
-        override fun onTimelineChanged(
-            timeline: androidx.media3.common.Timeline,
-            reason: Int,
-        ) {
-            if (self !== primary.player) return
-            planPrimaryCrossfade()
-        }
-
-        /** Publishes the REAL decoder format (sampleRate/bitrate/codec) so the
-         *  UI can show the technical chip without metadata guessing. */
-        override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
-            if (self !== primary.player) return
-            var sRate = 0
-            var bps = 0
-            var mime = ""
-            outer@ for (group in tracks.groups) {
-                if (group.type != C.TRACK_TYPE_AUDIO) continue
-                for (i in 0 until group.length) {
-                    val f = group.getTrackFormat(i)
-                    if (f.sampleRate > 0) {
-                        sRate = f.sampleRate
-                        bps = if (f.bitrate > 0) f.bitrate else 0
-                        mime = f.sampleMimeType ?: ""
-                        break@outer
-                    }
-                }
-            }
-            FormatBus.current = FormatBus.formatString(sRate, bps, mime)
-        }
-    }
-
-    // --------------------------------------------------------- orchestrator
-
-    /** Active track descriptor off the live player (works in both modes). */
-    private fun activeTrackFromPlayer(): Pair<String, Long>? {
-        val p = primary.player ?: return null
-        val mi = p.currentMediaItem ?: return null
-        val uri = mi.localConfiguration?.uri?.toString() ?: return null
-        val dur = mi.mediaMetadata.extras?.getLong(EXTRA_DURATION_MS) ?: 0L
-        return uri to dur
-    }
-
-    /**
-     * Block 11 bookkeeping for the track leaving the playhead: stats commit
-     * under the "count as played" threshold, progress snapshot for tracks the
-     * per-track progress policy keeps. Call when the OUTGOING track is still
-     * the player's current item (skip/ended/seam), never after switching.
-     */
-    private fun commitTrackState() {
-        val (uri, dur) = activeTrackFromPlayer() ?: return
-        val pos = primary.player?.currentPosition ?: 0L
-        val keep = TrackProgressPolicy.keepProgress(
-            dur,
-            LibrarySettings.progressMinMinutes(this),
-            LibrarySettings.storeProgress(this),
-        )
-        val count = CountAsPlayedPolicy.counts(pos, dur, LibrarySettings.countPct(this))
-        android.util.Log.i(
-            TAG, "commitTrackState uri=$uri pos=$pos dur=$dur keep=$keep count=$count",
-        )
-        when {
-            count -> TrackStateStore.commitCount(this, uri, if (keep) pos else 0L)
-            keep -> TrackStateStore.saveProgress(this, uri, pos)
-        }
-    }
-
-    /** Progress-only snapshot on pause (stats are counted on advances only). */
-    private fun saveListeningProgress() {
-        if (!LibrarySettings.storeProgress(this)) return
-        val (uri, dur) = activeTrackFromPlayer() ?: return
-        if (!TrackProgressPolicy.keepProgress(
-                dur, LibrarySettings.progressMinMinutes(this),
-                toggledOn = true,
-            )
-        ) return
-        TrackStateStore.saveProgress(this, uri, primary.player?.currentPosition ?: 0L)
-    }
-
-    /** Resolved opening position for [track] (0 = start from the beginning). */
-    private fun restorePositionFor(track: MediaTrack): Long {
-        if (!TrackProgressPolicy.keepProgress(
-                track.durationMs, LibrarySettings.progressMinMinutes(this),
-                LibrarySettings.storeProgress(this),
-            )
-        ) return 0L
-        return TrackStateStore.positionFor(this, track.uri)
-    }
-
-    /** Starts playback of [queueIndex] from orchestrator state (dual/queued restore). */
-    private fun playCurrentItem(positionMs: Long) {
-        if (queueIndex !in queueTracks.indices) return
-        cancelPendingFadeFinish()
-        fadeActive = false
-        val oldOverlay = overlay
-        overlay = null
-        oldOverlay?.release()
-        advanceEngine.currentTrackOpened(sidOf(queueIndex))
-
-        val track = queueTracks[queueIndex]
-        // Per-track progress (block 11): an open without an explicit position
-        // resumes the remembered playhead for qualifying long tracks only.
-        val pos = if (positionMs > 0L) positionMs else restorePositionFor(track)
-        val item = track.toMediaItem()
-        // Focus is managed by the service (block 8 toggles), not by ExoPlayer.
-        val beam = buildBeam(withFocus = false)
-        beam.player?.setMediaItem(item, pos)
-        beam.player?.prepare()
-        beam.player?.play()
-        // Give the session the live beam: the audible engine changes, so the
-        // session player must follow (single decoder identity for the UI).
-        applyDualBeamFlags(beam.player)
-        mediaSession?.setPlayer(beam.player!!)
-        plannedRealDurationMs = -1L
-        primary.release()
-        primary = beam
-        planPrimaryCrossfade()
-        saveQueueSnapshot()
-        armOverlay()
-    }
-
-    /** Arms the paused overlay decoder with the NEXT track + forced fade-in plan. */
-    private fun armOverlay() {
-        if (!dualMode || fadeActive) return
-        val nextIdx = queueIndex + 1
-        if (nextIdx !in queueTracks.indices) return
-        val oldOverlay = overlay
-        overlay = null
-        oldOverlay?.release()
-        val beam = buildBeam(withFocus = false)
-        beam.player?.setMediaItem(queueTracks[nextIdx].toMediaItem())
-        beam.dsp?.setCrossfadePlan(
-            durationsMs = queueTracks.drop(nextIdx).map { it.durationMs },
-            fadeMs = crossfadeMs,
-            itemIndex = 0,
-            positionMs = 0,
-            forceFadeIn = true,
-        )
-        beam.player?.prepare()
-        overlay = beam
-    }
-
-    /** Starts the second decoder so both sound together (real overlap begins). */
-    private fun startOverlap() {
-        if (fadeActive) return
-        val ov = overlay?.player ?: return
-        fadeActive = true
-        advanceEngine.pendingTrackOpened(sidOf(queueIndex + 1))
-        ov.play()
-        mainHandler.postDelayed(finishFadeRunnable, crossfadeMs)
-    }
-
-    /** Promotes the overlay once the fade completed (pending → current promotion). */
-    private fun finishFade() {
-        if (!fadeActive) return
-        val ov = overlay ?: run {
-            fadeActive = false
-            cancelPendingFadeFinish()
-            return
-        }
-        commitTrackState() // outgoing track finished (still the session player)
-        advanceEngine.dspTrackStarted(sidOf(queueIndex + 1)) // engine promotion
-        fadeActive = false
-        cancelPendingFadeFinish()
-        queueIndex += 1
-        plannedRealDurationMs = -1L
-        advanceEngine.currentTrackOpened(sidOf(queueIndex))
-        QueueBus.publish(queueTracks, queueIndex)
-        val old = primary
-        primary = ov
-        overlay = null
-        mediaSession?.setPlayer(ov.player!!)
-        planPrimaryCrossfade()
-        old.release()
-        saveQueueSnapshot()
-        armOverlay()
-    }
-
-    private val finishFadeRunnable = Runnable { finishFade() }
-    private fun cancelPendingFadeFinish() { mainHandler.removeCallbacks(finishFadeRunnable) }
-
-    /** Instant advance (skip / next-media-button / end-without-overlay). */
-    private fun advanceOrchestrator() {
-        if (!dualMode) return
-        android.util.Log.i(
-            TAG, "advanceOrchestrator qi=$queueIndex n=${queueTracks.size} repAll=$isRepeatAll",
-        )
-        commitTrackState() // outgoing track: ended (pos≈dur) or user skip
-        var next = queueIndex + 1
-        if ((next !in queueTracks.indices) && isRepeatAll && queueTracks.isNotEmpty()) {
-            next = 0 // repeat all: continuous replay of the whole queue
-        }
-        if (next !in queueTracks.indices) {
-            advanceEngine.playbackTerminated()
-            cancelPendingFadeFinish()
-            return
-        }
-        cancelPendingFadeFinish()
-        fadeActive = false
-        val index = next
-        queueIndex = index
-        plannedRealDurationMs = -1L
-        QueueBus.publish(queueTracks, index)
-        val beam = buildBeam(withFocus = false).also {
-            it.player?.setMediaItem(queueTracks[index].toMediaItem())
-            it.dsp?.setCrossfadePlan(
-                durationsMs = queueTracks.drop(index).map { tr -> tr.durationMs },
-                fadeMs = crossfadeMs,
-                itemIndex = 0,
-                positionMs = 0,
-                forceFadeIn = true,
-            )
-            it.player?.prepare()
-        }
-        applyDualBeamFlags(beam.player)
-        advanceEngine.currentTrackOpened(sidOf(index))
-        mediaSession?.setPlayer(beam.player!!)
-        primary.release()
-        primary = beam
-        beam.player?.play()
-        planPrimaryCrossfade()
-        saveQueueSnapshot()
-        armOverlay()
-    }
-
-    private fun planPrimaryCrossfade() {
-        val dsp = primary.dsp ?: return
-        if (!dualMode) { resetCrossfadePlan(dsp); return }
-        // Repeat-one loops the single item natively: no seam, no fades.
-        if (isRepeatOne) { resetCrossfadePlan(dsp); return }
-        if (queueIndex !in queueTracks.indices) return
-        // Primary owns exactly one item; its plan uses the remaining queue's
-        // durations so the fade-OUT is aligned to the item's own end (seam).
-        val durations = queueTracks.drop(queueIndex).map { it.durationMs }
-        dsp.setCrossfadePlan(
-            durationsMs = durations,
-            fadeMs = crossfadeMs,
-            itemIndex = 0,
-            positionMs = primary.player?.currentPosition ?: 0,
-        )
-    }
-
-    /**
-     * MediaStore durations can disagree with the decoder's real duration
-     * (observed on long OPUS recordings). The fade-OUT must align to the
-     * real end, so re-plan whenever the player reports a new duration.
-     */
-    private var plannedRealDurationMs = -1L
-
-    private fun replanWithRealDuration(player: androidx.media3.common.Player) {
-        val dur = player.duration
-        if (dur <= 0 || dur == androidx.media3.common.C.TIME_UNSET) return
-        if (dur == plannedRealDurationMs) return
-        plannedRealDurationMs = dur
-        primary.dsp?.setCrossfadePlan(
-            durationsMs = listOf(dur),
-            fadeMs = crossfadeMs,
-            itemIndex = 0,
-            positionMs = player.currentPosition,
-        )
-    }
-
-    private fun resetCrossfadePlan(dsp: DspAudioProcessor) {
-        dsp.setCrossfadePlan(emptyList(), 0L, 0, 0)
-    }
-
-    private fun replanAfterCrossfadeChange() {
-        planPrimaryCrossfade()
-        if (!dualMode) { overlay?.release(); overlay = null; return }
-        armOverlay()
-    }
-
-    /** Watches the session player to launch the overlap exactly at seam−fadeMs. */
-    private val fadeWatcher = object : Runnable {
-        override fun run() {
-            val p = primary.player
-            if (!fadeActive && p != null && dualMode) {
-                replanWithRealDuration(p)
-            }
-            if (!fadeActive && p != null && p.isPlaying && dualMode && !isRepeatOne &&
-                queueIndex in queueTracks.indices && queueIndex + 1 < queueTracks.size
-            ) {
-                val dur = p.duration
-                if (dur > 0 && dur < C.TIME_UNSET &&
-                    dur >= 2 * crossfadeMs &&
-                    p.currentPosition >= dur - crossfadeMs
-                ) {
-                    startOverlap()
-                }
-            }
-            mainHandler.postDelayed(this, WATCHER_PERIOD_MS)
-        }
-    }
-
-    private fun skipNext() {
-        android.util.Log.i(TAG, "skipNext dual=$dualMode")
-        if (dualMode) advanceOrchestrator() else {
-            commitTrackState() // single mode: outgoing track (player-based)
-            primary.player?.seekToNextMediaItem()
-        }
-    }
-
-    private fun skipPrevious() {
-        commitTrackState() // outgoing position, before any index change
-        android.util.Log.i(TAG, "skipPrevious qi=$queueIndex n=${queueTracks.size} dual=$dualMode")
-        if (!dualMode && queueIndex - 1 !in queueTracks.indices) {
-            primary.player?.seekToPreviousMediaItem()
-            return
-        }
-        if (dualMode && queueIndex == 0) {
-            // ⏮ at the first track: restart it (never queueIndex=-1).
-            QueueBus.publish(queueTracks, 0)
-            dualModeOrchestratorPlayPrevious()
-            return
-        }
-        queueIndex -= 1
-        if (dualMode && queueIndex in queueTracks.indices) {
-            QueueBus.publish(queueTracks, queueIndex)
-        }
-        dualModeOrchestratorPlayPrevious()
-    }
-
-    /** Queue screen: jump directly to [idx] WITHOUT re-shuffling/re-queueing. */
-    private fun queueJump(idx: Int) {
-        cancelPendingFadeFinish()
-        fadeActive = false
-        commitTrackState() // outgoing track, before index change
-        queueIndex = idx
-        plannedRealDurationMs = -1L
-        playCurrentItem(0L)
-        QueueBus.publish(queueTracks, idx)
-    }
-
-    private fun dualModeOrchestratorPlayPrevious() {
-        if (queueIndex !in queueTracks.indices) return
-        playCurrentItem(0L)
-    }
-
-    // ---------------------------------------------------- queue persistence
-
-    private fun saveQueueSnapshot() {
-        val p = primary.player ?: return
-        val snapshot: List<MediaTrack>
-        val index: Int
-        if (dualMode) {
-            if (queueIndex !in queueTracks.indices) return // corrupt index guard
-            snapshot = queueTracks
-            index = queueIndex
-        } else {
-            if (p.mediaItemCount == 0) return
-            snapshot = (0 until p.mediaItemCount).mapNotNull { i ->
-                val mi = p.getMediaItemAt(i)
-                val uri = mi.localConfiguration?.uri?.toString() ?: return@mapNotNull null
-                MediaTrack(
-                    uri = uri,
-                    title = mi.mediaMetadata.title?.toString() ?: "?",
-                    artist = mi.mediaMetadata.artist?.toString() ?: "",
-                    album = mi.mediaMetadata.albumTitle?.toString() ?: "",
-                    durationMs = mi.mediaMetadata.extras?.getLong(EXTRA_DURATION_MS) ?: 0L,
-                )
-            }
-            index = p.currentMediaItemIndex
-        }
-        if (snapshot.isEmpty()) return
-        QueueStore.save(this, snapshot, index, p.currentPosition)
-    }
-
-    private fun startSaveTicker() { mainHandler.postDelayed(saveTicker, SAVE_PERIOD_MS) }
-    private fun stopSaveTicker() { mainHandler.removeCallbacks(saveTicker) }
-
-    private val saveTicker = object : Runnable {
+    internal val saveTicker = object : Runnable {
         override fun run() {
             if (primary.player?.isPlaying == true) {
                 saveQueueSnapshot()
@@ -611,486 +206,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    // ----------------------------------------------------- session plumbing
-
-    private val sessionCallback = object : MediaSession.Callback {
-
-        override fun onConnect(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-        ): MediaSession.ConnectionResult {
-            android.util.Log.i(TAG, "onConnect uid=${controller.uid} pkg=${controller.packageName}")
-            val cmds = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                .add(SessionCommand(CMD_SET_PRESET, Bundle.EMPTY))
-                .add(SessionCommand(CMD_SET_CROSSFADE, Bundle.EMPTY))
-                .add(SessionCommand(CMD_SKIP_NEXT, Bundle.EMPTY))
-                .add(SessionCommand(CMD_SKIP_PREV, Bundle.EMPTY))
-                .add(SessionCommand(CMD_SET_QUEUE, Bundle.EMPTY))
-                .add(SessionCommand(CMD_SEEK_QUEUE, Bundle.EMPTY))
-                .add(SessionCommand(CMD_ENQUEUE_NEXT, Bundle.EMPTY))
-                .add(SessionCommand(CMD_SET_REPEAT, Bundle.EMPTY))
-                .add(SessionCommand(CMD_SET_SHUFFLE, Bundle.EMPTY))
-                .add(SessionCommand(CMD_SET_REPLAY_GAIN, Bundle.EMPTY))
-                .build()
-            // Custom layout: real skip buttons live in the notification/UI even
-            // in dual mode, where the single-item session player cannot serve
-            // player-level next/previous. Applies to the session itself (self).
-            runCatching { session.setCustomLayout(skipLayout()) }
-            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailableSessionCommands(cmds)
-                .build()
-        }
-
-        override fun onCustomCommand(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            customCommand: SessionCommand,
-            args: Bundle,
-        ): ListenableFuture<SessionResult> = when (customCommand.customAction) {
-            CMD_SET_PRESET -> {
-                val json = args.getString(EXTRA_PRESET_JSON)
-                if (json == null) {
-                    completed(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
-                } else {
-                    runCatching {
-                        val p = com.powerampfree.audio.dsp.EqPreset.fromJson(json)
-                        PresetStore.storeCurrent(applicationContext, p)
-                        primary.dsp?.applyPreset(p)
-                        overlay?.dsp?.applyPreset(p)
-                        android.util.Log.i(
-                            TAG,
-                            "applyPreset bands=${p.bands.size} graphic=${p.graphicOn} " +
-                                "gains=${p.graphicGainsDb.joinToString(prefix="(", postfix=")") { "%.1f".format(it) }} " +
-                                "tone=${p.toneOn} b=${p.toneBassPct.toInt()}% t=${p.toneTreblePct.toInt()}% " +
-                                "limit=${p.limitOn} resolved=${p.resolvedBands().size}",
-                        )
-                    }
-                    completed(SessionResult(SessionResult.RESULT_SUCCESS))
-                }
-            }
-            CMD_SET_CROSSFADE -> {
-                PlaybackSettings.setCrossfadeMs(applicationContext, args.getLong(EXTRA_CROSSFADE_MS, 0L))
-                replanAfterCrossfadeChange()
-                completed(SessionResult(SessionResult.RESULT_SUCCESS))
-            }
-            CMD_SKIP_NEXT -> { skipNext(); completed(SessionResult(SessionResult.RESULT_SUCCESS)) }
-            CMD_SKIP_PREV -> { skipPrevious(); completed(SessionResult(SessionResult.RESULT_SUCCESS)) }
-            CMD_SET_REPEAT -> {
-                val mode = args.getString(EXTRA_REPEAT_MODE) ?: ""
-                if (mode !in listOf(
-                        PlaybackSettings.REPEAT_OFF,
-                        PlaybackSettings.REPEAT_ONE,
-                        PlaybackSettings.REPEAT_ALL,
-                    )
-                ) {
-                    completed(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
-                } else {
-                    android.util.Log.i(TAG, "setRepeat mode=$mode dual=$dualMode")
-                    PlaybackSettings.setRepeatMode(applicationContext, mode)
-                    if (dualMode) {
-                        applyDualBeamFlags(primary.player)
-                        // one: loop natively, so re-clear the seam plan; all/one
-                        // switch changes whether the overlay must be armed.
-                        planPrimaryCrossfade()
-                    } else {
-                        applyNativePlayerFlags(primary.player)
-                    }
-                    completed(SessionResult(SessionResult.RESULT_SUCCESS))
-                }
-            }
-            CMD_SET_SHUFFLE -> {
-                val on = args.getBoolean(EXTRA_SHUFFLE_ON, false)
-                android.util.Log.i(TAG, "setShuffle on=$on dual=$dualMode")
-                PlaybackSettings.setShuffleEnabled(applicationContext, on)
-                if (dualMode) {
-                    if (on && queueIndex in queueTracks.indices) {
-                        // Current track first, everything after it randomized.
-                        val current = queueTracks[queueIndex]
-                        val rest = queueTracks.filterIndexed { i, _ -> i != queueIndex }
-                        queueTracks = listOf(current) + ShuffleOps.shuffleTail(
-                            rest, -1, kotlin.random.Random(System.nanoTime()),
-                        )
-                        queueIndex = 0
-                        QueueBus.publish(queueTracks, 0)
-                        saveQueueSnapshot()
-                        armOverlay()
-                    }
-                } else {
-                    primary.player?.shuffleModeEnabled = on
-                }
-                completed(SessionResult(SessionResult.RESULT_SUCCESS))
-            }
-            CMD_SET_QUEUE -> {
-                val tracks = args.getString(EXTRA_TRACKS_JSON)?.let { json ->
-                    runCatching { MediaTrack.listFromJson(json) }.getOrNull()
-                }
-                if (tracks.isNullOrEmpty()) {
-                    completed(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
-                } else {
-                    setQueue(tracks, args.getInt(EXTRA_START_INDEX, 0))
-                    completed(SessionResult(SessionResult.RESULT_SUCCESS))
-                }
-            }
-            CMD_SEEK_QUEUE -> {
-                val idx = args.getInt(EXTRA_START_INDEX, -1)
-                android.util.Log.i(TAG, "seekQueue idx=$idx dual=$dualMode")
-                when {
-                    !dualMode && idx >= 0 -> {
-                        primary.player?.seekTo(idx, 0L)
-                        completed(SessionResult(SessionResult.RESULT_SUCCESS))
-                    }
-                    dualMode && idx in queueTracks.indices -> {
-                        queueJump(idx)
-                        completed(SessionResult(SessionResult.RESULT_SUCCESS))
-                    }
-                    else -> completed(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
-                }
-            }
-            CMD_ENQUEUE_NEXT -> {
-                val tracks = args.getString(EXTRA_TRACKS_JSON)?.let { json ->
-                    runCatching { MediaTrack.listFromJson(json) }.getOrNull()
-                }
-                if (tracks.isNullOrEmpty()) {
-                    completed(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
-                } else {
-                    enqueueTracks(tracks, args.getBoolean(EXTRA_ENQUEUE_END, false))
-                    completed(SessionResult(SessionResult.RESULT_SUCCESS))
-                }
-            }
-            CMD_SET_REPLAY_GAIN -> {
-                // Prefs already persisted by the UI; re-apply the trim live.
-                applyReplayGain()
-                completed(SessionResult(SessionResult.RESULT_SUCCESS))
-            }
-            else -> completed(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
-        }
-
-        /** Installs a full queue; both engines are served from the same entry point. */
-        private fun setQueue(tracks: List<MediaTrack>, startIndex: Int) {
-            android.util.Log.i(TAG, "setQueue n=${tracks.size} index=$startIndex dual=$dualMode")
-            if (tracks.isEmpty()) return
-            val start = startIndex.coerceIn(0, tracks.size - 1)
-            if (dualMode) {
-                // With shuffle on, the chosen track leads and the rest of the
-                // queue is randomized (behavioral family with the reference).
-                val ordered = if (shuffleOn && tracks.size > 1) {
-                    val rest = tracks.filterIndexed { i, _ -> i != start }
-                    listOf(tracks[start]) + ShuffleOps.shuffleTail(
-                        rest, -1, kotlin.random.Random(System.nanoTime()),
-                    )
-                } else tracks
-                queueTracks = ordered
-                queueIndex = 0
-                QueueBus.publish(ordered, 0)
-                playCurrentItem(0L)
-            } else {
-                val p = primary.player ?: return
-                applyNativePlayerFlags(p)
-                val startTrack = tracks[start]
-                val startPos = restorePositionFor(startTrack)
-                p.setMediaItems(tracks.map { it.toMediaItem() }, start, startPos)
-                p.prepare()
-                p.play()
-                QueueBus.publish(tracks, start)
-            }
-        }
-
-        // Insert tracks after the current item (or at the end) without
-        // interrupting ongoing playback (context-menu "enqueue next").
-        private fun enqueueTracks(tracks: List<MediaTrack>, atEnd: Boolean) {
-            if (dualMode) {
-                if (queueTracks.isEmpty()) {
-                    setQueue(tracks, 0)
-                    return
-                }
-                val at = if (atEnd) queueTracks.size else queueIndex + 1
-                val newList = queueTracks.take(at) + tracks + queueTracks.drop(at)
-                queueTracks = newList
-                QueueBus.publish(newList, queueIndex)
-                android.util.Log.i(
-                    TAG, "enqueue n=${tracks.size} at=$at dual=true total=${newList.size}",
-                )
-            } else {
-                val p = primary.player ?: return
-                val base = QueueBus.tracks
-                val at = when {
-                    base.isEmpty() || QueueBus.index < 0 -> p.mediaItemCount
-                    atEnd -> p.mediaItemCount
-                    else -> (QueueBus.index + 1).coerceIn(0, p.mediaItemCount)
-                }
-                android.util.Log.i(TAG, "enqueue n=${tracks.size} at=$at dual=false")
-                p.addMediaItems(at, tracks.map { it.toMediaItem() })
-                // Publish the new structure for the queue screen.
-                if (base.isEmpty()) {
-                    QueueBus.publish(tracks, 0)
-                } else {
-                    val atList = at.coerceIn(0, base.size)
-                    QueueBus.publish(
-                        base.take(atList) + tracks + base.drop(atList),
-                        atList,
-                    )
-                }
-            }
-        }
-
-        // Dual-mode queue changes from controllers (UI) route through the
-        // orchestrator; the session player receives only the current item so
-        // no second decoder duplicates audio.
-        override fun onSetMediaItems(
-            mediaSession: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            mediaItems: MutableList<MediaItem>,
-            startIndex: Int,
-            startPositionMs: Long,
-        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            android.util.Log.i(
-                TAG,
-                "onSetMediaItems items=${mediaItems.size} start=$startIndex dual=$dualMode",
-            )
-            if (!dualMode || mediaItems.isEmpty()) {
-                return super.onSetMediaItems(
-                    mediaSession, controller, mediaItems, startIndex, startPositionMs,
-                )
-            }
-            queueTracks = mediaItems.map { mi ->
-                MediaTrack(
-                    uri = mi.localConfiguration?.uri?.toString() ?: "?",
-                    title = mi.mediaMetadata.title?.toString() ?: "?",
-                    artist = mi.mediaMetadata.artist?.toString() ?: "",
-                    album = mi.mediaMetadata.albumTitle?.toString() ?: "",
-                    durationMs = mi.mediaMetadata.extras?.getLong(EXTRA_DURATION_MS) ?: 0L,
-                )
-            }
-            queueIndex = startIndex.coerceIn(0, queueTracks.size - 1)
-            QueueBus.publish(queueTracks, queueIndex)
-            playCurrentItem(startPositionMs)
-            return completed(
-                MediaSession.MediaItemsWithStartPosition(
-                    mutableListOf(queueTracks[queueIndex].toMediaItem()), 0, startPositionMs,
-                ),
-            )
-        }
-
-        /**
-         * Headset/media buttons (block 10). Honours the respond-to-buttons
-         * toggle (off ⇒ swallow everything); a hook button resolves through
-         * [gestures] (single/double/triple/long press), while standard media
-         * keys map straight to our engine so next/previous work in dual mode.
-         */
-        override fun onMediaButtonEvent(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            intent: Intent,
-        ): Boolean {
-            if (!AudioSettings.respondToButtons(applicationContext)) return true // swallow
-            @Suppress("DEPRECATION")
-            val event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
-                as? android.view.KeyEvent
-                ?: return super.onMediaButtonEvent(session, controller, intent)
-            return when (event.keyCode) {
-                android.view.KeyEvent.KEYCODE_HEADSETHOOK -> {
-                    handleHook(event); true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                    enginePlay(); true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                    enginePause(); true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    engineToggle(); true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> {
-                    skipNext(); true
-                }
-                android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
-                    skipPrevious(); true
-                }
-                else -> super.onMediaButtonEvent(session, controller, intent)
-            }
-        }
-
-        // Dual-mode trade-off (documented): the session player holds exactly one
-        // item, so player-level next/previous have no visible item to seek.
-        // Advancement is driven by the orchestrator on natural track ends and
-        // through the app UI; native mode keeps Media3's full queue behavior.
-    }
-
-    // --------------------------------------------------- audio focus (8)
-
-    private var audioManager: android.media.AudioManager? = null
-    private var focusRequest: android.media.AudioFocusRequest? = null
-    private var haveFocus = false
-    /** True only when WE paused due to a focus loss (a user pause never sets it). */
-    private var focusPaused = false
-    private var focusDucked = false
-
-    private fun focusToggles() = FocusToggles(
-        pause = AudioSettings.focusPause(applicationContext),
-        resume = AudioSettings.focusResume(applicationContext),
-        duck = AudioSettings.focusDuck(applicationContext),
-    )
-
-    private val focusListener =
-        android.media.AudioManager.OnAudioFocusChangeListener { change ->
-            handleFocusChange(change)
-        }
-
-    private fun buildFocusRequestIfNeeded() {
-        if (focusRequest != null) return
-        val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
-            ?: return
-        audioManager = am
-        focusRequest = android.media.AudioFocusRequest.Builder(
-            android.media.AudioManager.AUDIOFOCUS_GAIN,
-        )
-            .setAudioAttributes(
-                android.media.AudioAttributes.Builder()
-                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build(),
-            )
-            .setOnAudioFocusChangeListener(focusListener, mainHandler)
-            .setWillPauseWhenDucked(false)
-            .build()
-    }
-
-    private fun ensureAudioFocus() {
-        buildFocusRequestIfNeeded()
-        val am = audioManager ?: return
-        val req = focusRequest ?: return
-        if (haveFocus) return
-        haveFocus = am.requestAudioFocus(req) ==
-            android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-    }
-
-    private fun abandonAudioFocus() {
-        val am = audioManager ?: return
-        val req = focusRequest ?: return
-        if (haveFocus) am.abandonAudioFocusRequest(req)
-        haveFocus = false
-        focusPaused = false
-        if (focusDucked) {
-            focusDucked = false
-            primary.dsp?.setDuck(false)
-            overlay?.dsp?.setDuck(false)
-        }
-    }
-
-    private fun handleFocusChange(change: Int) {
-        val fc = when (change) {
-            android.media.AudioManager.AUDIOFOCUS_GAIN -> FocusChange.GAIN
-            android.media.AudioManager.AUDIOFOCUS_LOSS -> FocusChange.LOSS
-            android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> FocusChange.LOSS_TRANSIENT
-            android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
-                FocusChange.LOSS_TRANSIENT_CAN_DUCK
-            else -> return
-        }
-        val playing = primary.player?.isPlaying == true
-        val action = FocusPolicy.onEvent(fc, focusToggles(), focusPaused, focusDucked)
-        when (action) {
-            FocusAction.PAUSE -> if (playing) {
-                focusPaused = true
-                enginePause()
-            }
-            FocusAction.RESUME -> {
-                enginePlay()
-                focusPaused = false
-            }
-            FocusAction.DUCK -> if (playing && !focusDucked) {
-                focusDucked = true
-                primary.dsp?.setDuck(true)
-                overlay?.dsp?.setDuck(true)
-            }
-            FocusAction.RESTORE -> if (focusDucked) {
-                focusDucked = false
-                primary.dsp?.setDuck(false)
-                overlay?.dsp?.setDuck(false)
-            }
-            FocusAction.NONE -> {}
-        }
-        // A permanent loss drops our request; a later play re-requests.
-        if (fc == FocusChange.LOSS) haveFocus = false
-    }
-
-    // ------------------------------------------------ headset buttons (10)
-
-    private val gestures = HeadsetGestures()
-    private var wiredConnected = false
-    private var btConnected = false
-    private var plugInitialized = false
-
-    private val gestureResolve = Runnable { dispatchGesture(gestures.onResolveWindow()) }
-    private val gestureLong = Runnable { dispatchGesture(gestures.onLongElapsed()) }
-
-    private fun enginePlay() {
-        primary.player?.play()
-        if (fadeActive) overlay?.player?.play()
-    }
-
-    private fun enginePause() {
-        primary.player?.pause()
-        if (fadeActive) overlay?.player?.pause()
-    }
-
-    private fun engineToggle() {
-        if (primary.player?.isPlaying == true) enginePause() else enginePlay()
-    }
-
-    private fun handleHook(event: android.view.KeyEvent) {
-        when (event.action) {
-            android.view.KeyEvent.ACTION_DOWN -> {
-                if (event.repeatCount == 0) {
-                    mainHandler.removeCallbacks(gestureLong)
-                    mainHandler.postDelayed(gestureLong, gestures.longPressMs)
-                }
-                gestures.onDown(event.repeatCount)
-            }
-            android.view.KeyEvent.ACTION_UP -> {
-                mainHandler.removeCallbacks(gestureLong)
-                mainHandler.removeCallbacks(gestureResolve)
-                gestures.onUp()
-                mainHandler.postDelayed(gestureResolve, gestures.doubleWindowMs)
-            }
-        }
-    }
-
-    private fun dispatchGesture(action: HeadsetAction?) {
-        when (action) {
-            HeadsetAction.SINGLE -> performSinglePress()
-            HeadsetAction.DOUBLE_NEXT -> skipNext()
-            HeadsetAction.TRIPLE_PREV -> skipPrevious()
-            HeadsetAction.LONG_NEXT -> if (primary.player?.isPlaying == true) skipNext()
-            else -> {}
-        }
-    }
-
-    /**
-     * Single press maps by the active connection (wired preferred when both
-     * are up). Ambiguity (a BT button while wired is plugged) resolves to the
-     * wired action — documented, since a hook KeyEvent carries no source.
-     */
-    private fun performSinglePress() {
-        val action = if (wiredConnected || !btConnected) {
-            AudioSettings.wiredAction(applicationContext)
-        } else {
-            AudioSettings.btAction(applicationContext)
-        }
-        when (action) {
-            AudioSettings.ACTION_NEXT -> skipNext()
-            AudioSettings.ACTION_PREV -> skipPrevious()
-            else -> engineToggle()
-        }
-    }
-
-    private fun applyReplayGain() {
-        val db = AudioSettings.rgAppliedDb(applicationContext)
-        android.util.Log.i(TAG, "applyReplayGain db=$db")
-        primary.dsp?.setReplayGain(db)
-        overlay?.dsp?.setReplayGain(db)
-    }
-
-    private val noisyReceiver = object : android.content.BroadcastReceiver() {
+    internal val noisyReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY &&
                 AudioSettings.pauseOnDisconnect(applicationContext)
@@ -1100,7 +216,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private val headsetPlugReceiver = object : android.content.BroadcastReceiver() {
+    internal val headsetPlugReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != Intent.ACTION_HEADSET_PLUG) return
             val state = intent.getIntExtra("state", -1)
@@ -1119,7 +235,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private val btReceiver = object : android.content.BroadcastReceiver() {
+    internal val btReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != BT_A2DP_CONNECTION_CHANGED) return
             val state = intent.getIntExtra(BT_EXTRA_STATE, -1)
@@ -1131,19 +247,6 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private fun registerHeadsetReceivers() {
-        // NOISY + BT A2DP connection state (block 10).
-        runCatching {
-            registerReceiver(noisyReceiver, IntentFilter(android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY))
-        }
-        runCatching {
-            registerReceiver(headsetPlugReceiver, IntentFilter(Intent.ACTION_HEADSET_PLUG))
-        }
-        runCatching {
-            registerReceiver(btReceiver, IntentFilter(BT_A2DP_CONNECTION_CHANGED))
-        }
-    }
-
     // -------------------------------------------------------- service hooks
 
     override fun onCreate() {
@@ -1152,7 +255,7 @@ class PlaybackService : MediaSessionService() {
         advanceEngine = AutoAdvanceEngine(advanceListener)
         primary = buildBeam(withFocus = false)
         mediaSession = MediaSession.Builder(this, primary.player!!)
-            .setCallback(sessionCallback)
+            .setCallback(buildSessionCallback())
             .build()
         // Manifest receivers don't receive implicit custom actions (Android 8+);
         // register our API receiver dynamically so shell/automation broadcasts work.
@@ -1168,29 +271,6 @@ class PlaybackService : MediaSessionService() {
         registerHeadsetReceivers()
         restoreQueue()
         mainHandler.postDelayed(fadeWatcher, WATCHER_PERIOD_MS)
-    }
-
-    /** Queue restore: once, paused, at the saved position (no autoplay on boot). */
-    private fun restoreQueue() {
-        val saved = QueueStore.load(this) ?: return
-        if (saved.startIndex !in saved.items.indices) return // corrupt snapshot
-        val beam = primary
-        if (dualMode) {
-            queueTracks = saved.items
-            queueIndex = saved.startIndex
-            QueueBus.publish(queueTracks, queueIndex)
-            applyDualBeamFlags(beam.player)
-            beam.player?.setMediaItem(saved.items[saved.startIndex].toMediaItem(), saved.positionMs)
-            beam.player?.prepare()
-            planPrimaryCrossfade()
-            armOverlay()
-        } else {
-            beam.player?.setMediaItems(
-                saved.items.map { it.toMediaItem() }, saved.startIndex, saved.positionMs,
-            )
-            beam.player?.prepare()
-            QueueBus.publish(saved.items, saved.startIndex)
-        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
@@ -1211,9 +291,7 @@ class PlaybackService : MediaSessionService() {
         cancelPendingFadeFinish()
         mainHandler.removeCallbacks(gestureResolve)
         mainHandler.removeCallbacks(gestureLong)
-        runCatching { unregisterReceiver(noisyReceiver) }
-        runCatching { unregisterReceiver(headsetPlugReceiver) }
-        runCatching { unregisterReceiver(btReceiver) }
+        unregisterHeadsetReceivers()
         abandonAudioFocus()
         overlay?.release()
         overlay = null
@@ -1223,34 +301,7 @@ class PlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
-    private fun <T> completed(value: T): ListenableFuture<T> =
-        object : ListenableFuture<T> {            override fun cancel(mayInterruptIfRunning: Boolean): Boolean = false
-            override fun isCancelled(): Boolean = false
-            override fun isDone(): Boolean = true
-            override fun get(): T = value
-            override fun get(timeout: Long, unit: TimeUnit): T = value
-            override fun addListener(listener: Runnable, executor: Executor) {
-                executor.execute(listener)
-            }
-        }
-
-    /** Notification/custom-layout buttons backed by our own session commands. */
-    private fun skipLayout(): List<androidx.media3.session.CommandButton> = listOf(
-        androidx.media3.session.CommandButton.Builder()
-            .setDisplayName("Previous")
-            .setSessionCommand(SessionCommand(CMD_SKIP_PREV, Bundle.EMPTY))
-            .setIconResId(R.drawable.ic_skip_prev)
-            .build(),
-        androidx.media3.session.CommandButton.Builder()
-            .setDisplayName("Next")
-            .setSessionCommand(SessionCommand(CMD_SKIP_NEXT, Bundle.EMPTY))
-            .setIconResId(R.drawable.ic_skip_next)
-            .build(),
-    )
-
     companion object {
-        private const val TAG = "PafService"
-
         /** Own namespaced API — original commands, not the reference app's intents. */
         const val CMD_SET_PRESET = "com.powerampfree.player.SET_PRESET"
         const val CMD_SET_CROSSFADE = "com.powerampfree.player.SET_CROSSFADE"
@@ -1264,10 +315,10 @@ class PlaybackService : MediaSessionService() {
         const val CMD_SET_REPLAY_GAIN = "com.powerampfree.player.SET_REPLAY_GAIN"
 
         // Bluetooth A2DP connection state (block 10).
-        private const val BT_A2DP_CONNECTION_CHANGED =
+        internal const val BT_A2DP_CONNECTION_CHANGED =
             "android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED"
-        private const val BT_EXTRA_STATE = "android.bluetooth.profile.extra.STATE"
-        private const val BT_STATE_CONNECTED = 2 // BluetoothProfile.STATE_CONNECTED
+        internal const val BT_EXTRA_STATE = "android.bluetooth.profile.extra.STATE"
+        internal const val BT_STATE_CONNECTED = 2 // BluetoothProfile.STATE_CONNECTED
         const val EXTRA_PRESET_JSON = "com.powerampfree.player.preset_json"
         const val EXTRA_CROSSFADE_MS = "crossfade_ms"
         const val EXTRA_DURATION_MS = "durationMs"
@@ -1276,8 +327,7 @@ class PlaybackService : MediaSessionService() {
         const val EXTRA_ENQUEUE_END = "enqueue_end"
         const val EXTRA_REPEAT_MODE = "repeat_mode"
         const val EXTRA_SHUFFLE_ON = "shuffle_on"
-        private const val SAVE_PERIOD_MS = 15_000L
-        private const val WATCHER_PERIOD_MS = 15L
+        internal const val SAVE_PERIOD_MS = 15_000L
 
         fun sessionComponent(context: Context) =
             ComponentName(context, PlaybackService::class.java)
