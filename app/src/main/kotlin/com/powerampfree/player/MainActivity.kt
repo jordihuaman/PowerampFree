@@ -293,6 +293,9 @@ class MainActivity : ComponentActivity() {
         val typography = pafTypography(MaterialTheme.typography, boldFont)
 
         MaterialTheme(colorScheme = scheme, typography = typography) {
+            // Surface raíz: fija contentColor blanco para todos los textos que
+            // no declaran color propio (LocalContentColor por defecto es negro).
+            Surface(color = Paf.Bg, contentColor = Paf.Text) {
             // Edge-to-edge on MIUI: the content must clear the status bar or the
             // system UI swallows taps in the top band (observed).
             Column(
@@ -317,7 +320,11 @@ class MainActivity : ComponentActivity() {
                         )
                         PafTab.EQ -> EqTab()
                         PafTab.SEARCH -> SearchTab(onOpenCtx = openCtx)
-                        PafTab.QUEUE -> QueueTab(snap, onOpenCtx = openCtx)
+                        PafTab.QUEUE -> QueueTab(
+                            snap,
+                            onOpenCtx = openCtx,
+                            onBack = { tab = PafTab.LIBRARY },
+                        )
                         PafTab.MENU -> {
                             if (menuAbout) {
                                 Box(
@@ -339,6 +346,8 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onQueue = { tab = PafTab.QUEUE },
                                     onAbout = { menuAbout = true },
+                                    onPlayer = { tab = PafTab.PLAYER },
+                                    onLibrary = { tab = PafTab.LIBRARY },
                                 )
                             }
                         }
@@ -437,6 +446,7 @@ class MainActivity : ComponentActivity() {
                     snap = snap,
                     onOpenPlayer = { tab = PafTab.PLAYER },
                 )
+            }
             }
         }
     }

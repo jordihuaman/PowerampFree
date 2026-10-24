@@ -4,6 +4,65 @@ The analyzed reference cannot run here (it is an Android binary), so
 equivalence claims are *behavioral properties* traced from REA findings to
 tests that any environment can execute:
 
+## Sprint 12 (2026-10-23): player §3 + EQ neón + cola/búsqueda/playlists/ajustes — verificación
+
+Objetivo: cerrar la brecha visual de §3 (Player) y §6 (EQ) de `docs/UI_SPEC.md`
+y alinear las pantallas restantes con las capturas de `docs/ui-capture/`.
+
+### Implementado
+- **Player §3**: arte grande con pastillas like/dislike (abajo-izq) y
+  letras/menú (abajo-der); título y artista en pastillas; chips de modo
+  (barras, reloj, repeat, shuffle); waveform propia con seek por tap/drag;
+  transporte circular (prev/play/next + nudges ±10 s); tiempos `0:00` y
+  duración; chip técnico (`48 KHZ · 128 KBPS · MP3`). Aire flexible para que
+  el transporte quede en la zona baja como en la referencia.
+- **EQ §6**: selector segmentado único (3 iconos), panel de preamp + 10 faders,
+  curva en panel con mitad izquierda más clara, status chip centrado
+  (`NO DVC · EQ n · TON · LMT`), fila `Equ / Preset / ⋯`, chips Tone/Limit +
+  knobs Bass/Treble, crossfade y bandas paramétricas debajo. Diálogos
+  Presets y Opciones con estética propia (botones blancos). `PafHSlider`
+  sustituye al Slider M3 (sin thumb vertical ni track morado); `Knob`
+  parametrizado (`dialSize`).
+- **Cola / Búsqueda**: filas compartidas `PafTrackRow` (numeración, resaltado
+  de la pista actual), buscador con placeholder `Buscar…`, chips de filtro,
+  historial con icono Trash para Borrar.
+- **Playlists**: restyle con chips, `Nueva` con icono Plus, diálogos oscuros.
+- **Menú contextual**: iconos por acción; se oculta "Ir a: artista/álbum"
+  cuando MediaStore devuelve `<unknown>`; etiqueta `Artista desconocido`.
+- **Ajustes**: sin mojibake, textos blancos, iconos vectoriales.
+- **Menú principal**: fila Ajustes + chips Portada/Biblioteca/Cola/Acerca de
+  (alineados a la izquierda).
+- **Placeholder de carátula**: waveform oscura dibujada con Canvas (original)
+  en filas, mini-player y portada cuando no hay arte resoluble.
+- `Surface(color = Paf.Bg, contentColor = Paf.Text)` en la raíz para que
+  `LocalContentColor` no herede negro.
+
+### Verificado en dispositivo (Xiaomi tanzanite, Android 16)
+- Player: arte, pastillas, chips, waveform sin barra blanca huérfana,
+  `Artista desconocido`, tiempos `0:00` / `27:41`, chip técnico.
+- EQ: página 0 (faders, panel preamp, curva, status, Equ/Preset/⋯, knobs,
+  crossfade 8 s), Tone (knobs 132 dp), Limit, diálogo Presets.
+- Búsqueda: placeholder `Buscar…`, historial + 3 resultados, chip Borrar con
+  icono de papelera.
+- Cola: 2 pistas numeradas con la actual resaltada; estado restaurado
+  `[A, B]` PAUSED índice 0.
+- Playlists: chip + Nueva + diálogo; menú contextual con iconos y sin
+  "Ir a: <unknown>"; Ajustes y Menú principal revisados.
+- Build `:app:assembleDebug` OK tras cada tanda; APK instalado con
+  `adb install -r`.
+
+## Sprint 11 (2026-10-23): shell visual (tokens, tabs, filas, biblioteca) — verificación
+
+Commit `138268b` ("se optimiza el codigo, y se busca asemejar al Poweramp
+original"). Base del rediseño clean-room: `PafTheme.kt` con tokens medidos
+(#000/#0E0E0E/#181818/#222222/#313131/#3F3F3F; textos #FFF/#D1D1D1/#999;
+EQ #00FF00/#00A000), tipografía sans-serif-condensed bold, esquema M3 oscuro
+siempre; `PafBottomBar` con 4 tabs (Library/EQ/Search/Menu) e iconos Canvas;
+mini-player con miniatura + seekbar + play; `PafTrackRow` de 96 dp (thumb
+80 dp, 3 líneas 19/15/13 sp, resaltado Surf2); cabeceras con `PafBackPill` y
+`PafActionChip`; biblioteca (categorías, grid, listas, breadcrumb) alineada a
+las capturas. Verificado en dispositivo pantalla por pantalla.
+
 ## Sprint 10 (2026-10-22): playlists + visualización del player — verificación
 
 Bloques 4/6 (Add to Playlist + pantallas de playlists) y 14 núcleo (espectro

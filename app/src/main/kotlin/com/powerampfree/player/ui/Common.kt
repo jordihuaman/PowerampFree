@@ -115,6 +115,11 @@ internal fun MainActivity.extLabel(uriStr: String): String =
         uriStr.substringBefore('?').substringAfterLast('.', "").uppercase().ifBlank { "?" }
 
 
+/** Etiqueta de artista: MediaStore usa "<unknown>" para las pistas sin tag. */
+internal fun artistLabel(raw: String): String =
+    raw.takeIf { it.isNotBlank() && !it.startsWith("<unknown>") } ?: "Artista desconocido"
+
+
 internal fun MainActivity.fmtDur(ms: Long): String {
         if (ms <= 0) return "—"
         val s = ms / 1000
@@ -157,7 +162,7 @@ internal fun MainActivity.SpectrumBars(isPlaying: Boolean) {
             val fHigh = 16_000.0
             val logSpan = kotlin.math.ln(fHigh / fLow)
             val barW = size.width / barCount
-            val color = Color(0xFF39A7E4).copy(alpha = alphaPct / 100f)
+            val color = Paf.EqGreen.copy(alpha = alphaPct / 100f)
             val rounded = style == VizSettings.STYLE_ROUNDED
             val corner = androidx.compose.ui.geometry.CornerRadius(barW * 0.45f, barW * 0.45f)
             for (b in 0 until barCount) {

@@ -52,6 +52,9 @@ internal fun MainActivity.PafTrackRow(
     selecting: Boolean = false,
     selected: Boolean = false,
     onSelectToggle: (() -> Unit)? = null,
+    number: Int? = null,
+    onRowClick: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     QueueBus.version.value // suscripción: invalida la fila al cambiar la cola
@@ -68,7 +71,11 @@ internal fun MainActivity.PafTrackRow(
                 .height(96.dp)
                 .combinedClickable(
                     onClick = {
-                        if (selecting) onSelectToggle?.invoke() else playTracks(tracks, index)
+                        when {
+                            selecting -> onSelectToggle?.invoke()
+                            onRowClick != null -> onRowClick.invoke()
+                            else -> playTracks(tracks, index)
+                        }
                     },
                     onLongClick = { onOpenCtx(track, tracks, index) },
                 )
@@ -85,6 +92,18 @@ internal fun MainActivity.PafTrackRow(
                         ),
                 )
                 Spacer(Modifier.width(10.dp))
+            }
+            if (number != null) {
+                Text(
+                    "$number",
+                    fontFamily = PafFamilyBold,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = if (isCurrent) Paf.Text else Paf.Text3,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    modifier = Modifier.width(26.dp),
+                )
+                Spacer(Modifier.width(8.dp))
             }
             Box(
                 modifier = Modifier
@@ -119,7 +138,7 @@ internal fun MainActivity.PafTrackRow(
                 )
                 if (track.artist.isNotBlank()) {
                     Text(
-                        track.artist,
+                        artistLabel(track.artist),
                         fontFamily = PafFamily,
                         fontSize = 15.sp,
                         color = Paf.Text3,
@@ -142,6 +161,9 @@ internal fun MainActivity.PafTrackRow(
                     fontSize = 13.sp,
                     color = Paf.Text3,
                 )
+            }
+            if (trailing != null) {
+                trailing()
             }
         }
     }

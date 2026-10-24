@@ -48,6 +48,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -73,6 +74,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -83,6 +85,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Dp
 import java.io.File
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -111,6 +115,10 @@ import com.powerampfree.player.*
 
     // ------------------------------------------------------------- eq tab
 
+    /** dB con un decimal, sin "-0.0" cuando el valor es cero. */
+internal fun fmtDb(v: Float): String =
+        "%.1f".format(if (kotlin.math.abs(v) < 0.05f) 0f else v)
+
     /**
      * EQ screen (block 16): EQ / Tone / Limit tabs over the same resolved
      * preset. The graphic layer is 10 fixed bands of the parametric engine;
@@ -125,6 +133,8 @@ internal fun MainActivity.EqTab() {
         var savedPresets by remember { mutableStateOf(PresetStore.listNamed(this)) }
         var presetName by remember { mutableStateOf("MyPreset") }
         var page by remember { mutableStateOf(0) }
+        var showPresets by remember { mutableStateOf(false) }
+        var showOptions by remember { mutableStateOf(false) }
 
         fun update(p: EqPreset) {
             updatingPreset = p
@@ -134,13 +144,13 @@ internal fun MainActivity.EqTab() {
         Column(
             modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
-            EqStatusChip(updatingPreset)
+            // Selector segmentado EQ / Tone / Limit (una sola pastilla, §6).
+            PafSegmentedControl(
+                kinds = listOf(PafIconKind.Bars, PafIconKind.Tone, PafIconKind.Limit),
+                selected = page,
+                onSelect = { page = it },
+            )
             Spacer(Modifier.height(6.dp))
-            TabRow(selectedTabIndex = page) {
-                Tab(selected = page == 0, onClick = { page = 0 }, text = { Text("🎛 EQ") })
-                Tab(selected = page == 1, onClick = { page = 1 }, text = { Text("💿 Tone") })
-                Tab(selected = page == 2, onClick = { page = 2 }, text = { Text("🔊 Limit") })
-            }
             when (page) {
                 0 -> {
                     // --- faders: preamp + 10 graphic bands -----------------
@@ -148,20 +158,27 @@ internal fun MainActivity.EqTab() {
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.Top,
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(Paf.Surf1)
+                                .padding(horizontal = 2.dp, vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
                             VSlider(
                                 value = updatingPreset.preampDb,
                                 onValueChange = { v -> update(updatingPreset.copy(preampDb = v)) },
                                 valueRange = -12f..12f,
                                 modifier = Modifier
                                     .width(46.dp)
-                                    .height(240.dp)
+                                    .height(216.dp)
                                     .padding(3.dp),
                             )
-                            Text("Pre", style = MaterialTheme.typography.labelSmall)
+                            Text("Preamp", style = MaterialTheme.typography.labelSmall)
                             Text(
-                                "%.1f".format(updatingPreset.preampDb),
+                                fmtDb(updatingPreset.preampDb),
                                 style = MaterialTheme.typography.labelSmall,
+                                color = Paf.Text3,
                             )
                         }
                         updatingPreset.graphicGainsDb.forEachIndexed { i, g ->
@@ -181,7 +198,7 @@ internal fun MainActivity.EqTab() {
                                     valueRange = -12f..12f,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(240.dp)
+                                        .height(216.dp)
                                         .padding(2.dp),
                                 )
                                 Text(
@@ -189,42 +206,108 @@ internal fun MainActivity.EqTab() {
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                                 Text(
-                                    "%.1f".format(g.coerceIn(-12f, 12f)),
+                                    fmtDb(g.coerceIn(-12f, 12f)),
                                     style = MaterialTheme.typography.labelSmall,
+                                    color = Paf.Text3,
                                 )
                             }
                         }
                     }
                     Spacer(Modifier.height(4.dp))
-                    EqCurve(updatingPreset)
-                    // Block 14: "Equalizer Screen Spectrum" (Disabled/Classic/Rounded).
-                    if (VizSettings.eqSpectrum(this@EqTab) != VizSettings.EQ_DISABLED) {
-                        SpectrumBars(isPlaying = controller?.isPlaying == true)
+                    EqCurvePanel(updatingPreset)
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        EqStatusChip(updatingPreset)
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(
-                            checked = updatingPreset.graphicOn,
-                            onCheckedChange = { on -> update(updatingPreset.copy(graphicOn = on)) },
+                    Spacer(Modifier.height(6.dp))
+                    // Fila Equ / Preset / ⋯ de la referencia (§6).
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PafActionChip(
+                            label = "Equ",
+                            icon = PafIconKind.Bars,
+                            active = updatingPreset.graphicOn,
+                            onClick = {
+                                update(updatingPreset.copy(graphicOn = !updatingPreset.graphicOn))
+                            },
                         )
-                        Text("  EQ activo", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-                1 -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(
-                            checked = updatingPreset.toneOn,
-                            onCheckedChange = { on -> update(updatingPreset.copy(toneOn = on)) },
+                        PafActionChip(
+                            label = "Preset",
+                            icon = PafIconKind.Note,
+                            onClick = { showPresets = true },
                         )
-                        Text("  Tone activo", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.weight(1f))
+                        PafRoundButton(
+                            kind = PafIconKind.Dots,
+                            onClick = { showOptions = true },
+                            size = 38.dp,
+                            iconSize = 18.dp,
+                            background = Paf.Surf3,
+                        )
                     }
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                    // Tone/Limit + knobs Bass/Treble (siempre visibles, §6).
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            PafActionChip(
+                                label = "Tone",
+                                icon = PafIconKind.Tone,
+                                active = updatingPreset.toneOn,
+                                onClick = {
+                                    update(updatingPreset.copy(toneOn = !updatingPreset.toneOn))
+                                },
+                            )
+                            PafActionChip(
+                                label = "Limit",
+                                icon = PafIconKind.Limit,
+                                active = updatingPreset.limitOn,
+                                onClick = {
+                                    update(updatingPreset.copy(limitOn = !updatingPreset.limitOn))
+                                },
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
                         Knob(
                             label = "Bass",
                             value = updatingPreset.toneBassPct,
                             onValueChange = { pct ->
                                 update(updatingPreset.copy(toneBassPct = pct, toneOn = true))
                             },
+                            dialSize = 78.dp,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Knob(
+                            label = "Treble",
+                            value = updatingPreset.toneTreblePct,
+                            onValueChange = { pct ->
+                                update(updatingPreset.copy(toneTreblePct = pct, toneOn = true))
+                            },
+                            dialSize = 78.dp,
+                        )
+                    }
+                }
+                1 -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    ) {
+                        Knob(
+                            label = "Bass",
+                            value = updatingPreset.toneBassPct,
+                            onValueChange = { pct ->
+                                update(updatingPreset.copy(toneBassPct = pct, toneOn = true))
+                            },
+                            dialSize = 132.dp,
                         )
                         Knob(
                             label = "Treble",
@@ -232,29 +315,55 @@ internal fun MainActivity.EqTab() {
                             onValueChange = { pct ->
                                 update(updatingPreset.copy(toneTreblePct = pct, toneOn = true))
                             },
+                            dialSize = 132.dp,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        PafActionChip(
+                            label = if (updatingPreset.toneOn) "Tone activo" else "Tone apagado",
+                            icon = PafIconKind.Tone,
+                            active = updatingPreset.toneOn,
+                            onClick = {
+                                update(updatingPreset.copy(toneOn = !updatingPreset.toneOn))
+                            },
                         )
                     }
                     Spacer(Modifier.height(4.dp))
                     Text(
                         "Bass: shelf 250 Hz · Treble: shelf 4 kHz · máx +12 dB",
                         style = MaterialTheme.typography.bodySmall,
+                        color = Paf.Text3,
                     )
-                    EqCurve(updatingPreset)
+                    Spacer(Modifier.height(6.dp))
+                    EqCurvePanel(updatingPreset)
                 }
                 else -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(
-                            checked = updatingPreset.limitOn,
-                            onCheckedChange = { on -> update(updatingPreset.copy(limitOn = on)) },
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        PafActionChip(
+                            label = if (updatingPreset.limitOn) "Limitador activo" else "Limitador apagado",
+                            icon = PafIconKind.Limit,
+                            active = updatingPreset.limitOn,
+                            onClick = {
+                                update(updatingPreset.copy(limitOn = !updatingPreset.limitOn))
+                            },
                         )
-                        Text("  Limitador activo", style = MaterialTheme.typography.bodyMedium)
                     }
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         "Limitador suave: garantiza picos ≤ techo (0.98 FS) con " +
                             "release ~80 ms; sin coloración cuando el contenido está bien recortado.",
                         style = MaterialTheme.typography.bodySmall,
+                        color = Paf.Text3,
                     )
+                    Spacer(Modifier.height(6.dp))
+                    EqCurvePanel(updatingPreset)
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -263,19 +372,20 @@ internal fun MainActivity.EqTab() {
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 20.dp),
             ) {
                 item {
                     Text(
                         "Crossfade: ${crossfadeS} s" + if (crossfadeS == 0) " (off)" else "",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    Slider(
+                    PafHSlider(
                         value = crossfadeS.toFloat(),
+                        valueRange = 0f..12f,
                         onValueChange = { v ->
                             crossfadeS = v.toInt()
                             sendCrossfade(crossfadeS * 1000L)
                         },
-                        valueRange = 0f..12f,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -318,34 +428,284 @@ internal fun MainActivity.EqTab() {
                             update(PresetStore.defaultPreset())
                         }) { Text("Reset") }
                     }
-                    Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = presetName,
-                            onValueChange = { presetName = it },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                        )
-                        Button(onClick = {
-                            PresetStore.saveNamed(this@EqTab, updatingPreset.copy(name = presetName))
-                            savedPresets = PresetStore.listNamed(this@EqTab)
-                        }) { Text("Guardar") }
-                    }
-                    if (savedPresets.isNotEmpty()) {
-                        Text("Presets guardados:", style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            savedPresets.take(5).forEach { sp ->
-                                OutlinedButton(onClick = {
-                                    presetName = sp.name
-                                    update(sp)
-                                }) { Text(sp.name, style = MaterialTheme.typography.labelSmall) }
-                            }
-                        }
-                    }
                     Spacer(Modifier.height(10.dp))
                 }
             }
         }
+
+        if (showPresets) {
+            EqPresetsDialog(
+                presets = savedPresets,
+                name = presetName,
+                onName = { presetName = it },
+                onLoad = {
+                    presetName = it.name
+                    update(it)
+                },
+                onSave = {
+                    PresetStore.saveNamed(this@EqTab, updatingPreset.copy(name = presetName))
+                    savedPresets = PresetStore.listNamed(this@EqTab)
+                },
+                onReset = { update(PresetStore.defaultPreset()) },
+                onClose = { showPresets = false },
+            )
+        }
+        if (showOptions) {
+            EqOptionsDialog(
+                onAddBand = {
+                    if (updatingPreset.bands.size < 31) {
+                        update(
+                            updatingPreset.copy(
+                                bands = updatingPreset.bands +
+                                    Band(FilterType.PEAKING, 1000, 0f, 1.0f),
+                            ),
+                        )
+                    }
+                },
+                onReset = { update(PresetStore.defaultPreset()) },
+                onClose = { showOptions = false },
+            )
+        }
+    }
+
+
+    /**
+     * Selector segmentado de la referencia (§6): una única pastilla #181818
+     * con tres zonas iguales; el icono activo se pinta blanco.
+     */
+    @Composable
+internal fun MainActivity.PafSegmentedControl(
+        kinds: List<PafIconKind>,
+        selected: Int,
+        onSelect: (Int) -> Unit,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(46.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Paf.Surf2),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            kinds.forEachIndexed { i, kind ->
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable { onSelect(i) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    PafIcon(kind, if (i == selected) Paf.Text else Paf.Text3, 22.dp)
+                }
+            }
+        }
+    }
+
+
+    /** Panel de la curva: fondo #181818 con la mitad izquierda algo más clara. */
+    @Composable
+internal fun MainActivity.EqCurvePanel(preset: EqPreset) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Paf.Surf2),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.78f)
+                    .fillMaxHeight()
+                    .background(Paf.Surf1),
+            )
+            EqCurve(preset, modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp))
+        }
+    }
+
+
+    /** Slider horizontal fino (crossfade), coherente con el look del EQ. */
+    @Composable
+internal fun MainActivity.PafHSlider(
+        value: Float,
+        valueRange: ClosedFloatingPointRange<Float>,
+        onValueChange: (Float) -> Unit,
+        modifier: Modifier = Modifier,
+    ) {
+        val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
+        val frac = ((value - valueRange.start) / span).coerceIn(0f, 1f)
+        Box(
+            modifier = modifier
+                .height(30.dp)
+                .pointerInput(valueRange) {
+                    fun setAt(x: Float) {
+                        val f = (x / size.width.toFloat()).coerceIn(0f, 1f)
+                        onValueChange(valueRange.start + f * span)
+                    }
+                    detectTapGestures { pos -> setAt(pos.x) }
+                }
+                .pointerInput(valueRange) {
+                    detectDragGestures { change, _ ->
+                        change.consume()
+                        val f = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        onValueChange(valueRange.start + f * span)
+                    }
+                },
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                val cy = size.height / 2f
+                val h = 6.dp.toPx()
+                val r = CornerRadius(h / 2f)
+                drawRoundRect(
+                    Paf.Surf4,
+                    topLeft = Offset(0f, cy - h / 2f),
+                    size = Size(size.width, h),
+                    cornerRadius = r,
+                )
+                drawRoundRect(
+                    Paf.Text2,
+                    topLeft = Offset(0f, cy - h / 2f),
+                    size = Size(size.width * frac, h),
+                    cornerRadius = r,
+                )
+                drawCircle(Paf.Text, radius = 8.dp.toPx(), center = Offset(size.width * frac, cy))
+            }
+        }
+    }
+
+
+    /** Diálogo de presets (§6): cargar guardados, guardar con nombre, reset. */
+    @Composable
+internal fun MainActivity.EqPresetsDialog(
+        presets: List<EqPreset>,
+        name: String,
+        onName: (String) -> Unit,
+        onLoad: (EqPreset) -> Unit,
+        onSave: () -> Unit,
+        onReset: () -> Unit,
+        onClose: () -> Unit,
+    ) {
+        AlertDialog(
+            onDismissRequest = onClose,
+            containerColor = Paf.Surf2,
+            titleContentColor = Paf.Text,
+            textContentColor = Paf.Text2,
+            title = {
+                Text(
+                    "Presets",
+                    fontFamily = PafFamilyBold,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (presets.isEmpty()) {
+                        Text(
+                            "Sin presets guardados todavía.",
+                            fontFamily = PafFamily,
+                            color = Paf.Text3,
+                            fontSize = 14.sp,
+                        )
+                    }
+                    presets.take(6).forEach { sp ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(50))
+                                .background(Paf.Surf3)
+                                .clickable { onLoad(sp) }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            PafIcon(PafIconKind.Bars, Paf.EqGreen, 16.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                sp.name,
+                                fontFamily = PafFamilyBold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = Paf.Text,
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = onName,
+                        singleLine = true,
+                        label = { Text("Nombre") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = onSave) { Text("Guardar") }
+                        OutlinedButton(onClick = onReset) { Text("Reset") }
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = onClose,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Paf.Text),
+                ) { Text("Cerrar") }
+            },
+        )
+    }
+
+
+    /** Menú ⋯ del EQ: añadir banda o restablecer el preset. */
+    @Composable
+internal fun MainActivity.EqOptionsDialog(
+        onAddBand: () -> Unit,
+        onReset: () -> Unit,
+        onClose: () -> Unit,
+    ) {
+        AlertDialog(
+            onDismissRequest = onClose,
+            containerColor = Paf.Surf2,
+            titleContentColor = Paf.Text,
+            textContentColor = Paf.Text2,
+            title = {
+                Text(
+                    "Opciones",
+                    fontFamily = PafFamilyBold,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(
+                        "Añadir banda paramétrica" to onAddBand,
+                        "Restablecer EQ" to onReset,
+                    ).forEach { (label, action) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(50))
+                                .clickable {
+                                    action()
+                                    onClose()
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            PafIcon(PafIconKind.Dots, Paf.Text2, 16.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                label,
+                                fontFamily = PafFamilyBold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = Paf.Text,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = onClose,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Paf.Text),
+                ) { Text("Cerrar") }
+            },
+        )
     }
 
 
@@ -353,25 +713,33 @@ internal fun MainActivity.EqTab() {
     @Composable
 internal fun MainActivity.EqStatusChip(preset: EqPreset) {
         val eqCount = preset.bands.size + preset.graphicBandCount
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer,
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Paf.Surf2)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
-                Text("ⓘ ", style = MaterialTheme.typography.labelMedium)
-                Text(
-                    "NO DVC · EQ ${if (eqCount > 0) "$eqCount" else "OFF"} · " +
-                        "TON ${if (preset.toneOn) "ON" else "OFF"} · " +
-                        "LMT ${if (preset.limitOn) "ON" else "OFF"}",
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
+            PafIcon(PafIconKind.Info, Paf.Text3, 13.dp)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "NO DVC · EQ ${if (eqCount > 0) "$eqCount" else "OFF"} · " +
+                    "TON ${if (preset.toneOn) "ON" else "OFF"} · " +
+                    "LMT ${if (preset.limitOn) "ON" else "OFF"}",
+                fontFamily = PafFamilyBold,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                color = Paf.Text2,
+            )
         }
     }
 
 
     @Composable
-internal fun MainActivity.EqCurve(preset: EqPreset) {
+internal fun MainActivity.EqCurve(
+        preset: EqPreset,
+        modifier: Modifier = Modifier.fillMaxWidth().height(110.dp),
+    ) {
         // Off-screen engine instance just for the curve (same math as the DSP
         // chain): resolves ALL layers (parametric + graphic + tone shelves).
         val curve = remember(preset) {
@@ -382,13 +750,20 @@ internal fun MainActivity.EqCurve(preset: EqPreset) {
                 FloatArray(120)
             }
         }
-        Canvas(modifier = Modifier.fillMaxWidth().height(110.dp)) {
+        Canvas(modifier = modifier) {
             val dbMin = -18f
             val dbMax = +18f
             fun yForDb(db: Float): Float =
                 size.height - ((db - dbMin) / (dbMax - dbMin)) * size.height
+            // riel de respuesta (#313131) y línea de 0 dB tenue
+            drawRoundRect(
+                color = Paf.Surf4,
+                topLeft = Offset(0f, size.height / 2f - 1.5f),
+                size = Size(size.width, 3f),
+                cornerRadius = CornerRadius(2f),
+            )
             drawLine(
-                color = Color(0x33888888),
+                color = Color(0x22FFFFFF),
                 start = Offset(0f, yForDb(0f)),
                 end = Offset(size.width, yForDb(0f)),
             )
@@ -398,7 +773,9 @@ internal fun MainActivity.EqCurve(preset: EqPreset) {
                 val y = yForDb(db)
                 if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
-            drawPath(path, Color(0xFF39A7E4), style = Stroke(4f))
+            // halo verde + línea neón (§6)
+            drawPath(path, Paf.EqGlow.copy(alpha = 0.45f), style = Stroke(12f))
+            drawPath(path, Paf.EqGreen, style = Stroke(4f))
         }
     }
 
@@ -422,7 +799,6 @@ internal fun MainActivity.VSlider(
         Box(
             modifier = modifier
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF18251F))
                 .pointerInput(valueRange) {
                     fun setAt(y: Float) {
                         val f = (1f - y / size.height.toFloat()).coerceIn(0f, 1f)
@@ -446,24 +822,47 @@ internal fun MainActivity.VSlider(
         ) {
             Canvas(Modifier.fillMaxSize()) {
                 val fh = size.height * frac
-                drawRect(
-                    color = fillColor,
-                    topLeft = Offset(0f, size.height - fh),
-                    size = Size(size.width, fh),
+                val railW = size.width * 0.16f
+                val railX = (size.width - railW) / 2f
+                // riel #313131
+                drawRoundRect(
+                    color = Paf.Surf4,
+                    topLeft = Offset(railX, 0f),
+                    size = Size(railW, size.height),
+                    cornerRadius = CornerRadius(railW / 2f),
+                )
+                // segmento activo verde neón con halo (§6)
+                val glowW = railW * 2.1f
+                drawRoundRect(
+                    color = Paf.EqGlow.copy(alpha = 0.35f),
+                    topLeft = Offset((size.width - glowW) / 2f, size.height - fh),
+                    size = Size(glowW, fh),
+                    cornerRadius = CornerRadius(glowW / 2f),
+                )
+                drawRoundRect(
+                    color = Paf.EqGreen,
+                    topLeft = Offset(railX, size.height - fh),
+                    size = Size(railW, fh),
+                    cornerRadius = CornerRadius(railW / 2f),
                 )
                 // 0 dB center marker
                 drawLine(
-                    color = Color(0x22000000),
+                    color = Color(0x33FFFFFF),
                     start = Offset(0f, size.height / 2f),
                     end = Offset(size.width, size.height / 2f),
                     strokeWidth = 2f,
                 )
-                // handle
-                drawLine(
+                // thumb cápsula blanca
+                val thumbW = size.width * 0.62f
+                val thumbH = size.width * 0.22f
+                drawRoundRect(
                     color = Color.White,
-                    start = Offset(0f, size.height - fh),
-                    end = Offset(size.width, size.height - fh),
-                    strokeWidth = 3f,
+                    topLeft = Offset(
+                        (size.width - thumbW) / 2f,
+                        (size.height - fh - thumbH / 2f).coerceIn(0f, size.height - thumbH),
+                    ),
+                    size = Size(thumbW, thumbH),
+                    cornerRadius = CornerRadius(thumbH / 2f),
                 )
             }
         }
@@ -480,14 +879,15 @@ internal fun MainActivity.Knob(
         value: Float,
         onValueChange: (Float) -> Unit,
         modifier: Modifier = Modifier,
-        trackColor: Color = Color(0xFF303030),
-        fillColor: Color = Color(0xFF4CD56A),
+        dialSize: Dp = 96.dp,
+        trackColor: Color = Paf.Surf4,
+        fillColor: Color = Paf.EqGreen,
     ) {
         Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
             val frac = (value.coerceIn(0f, 100f)) / 100f
             Canvas(
                 modifier = Modifier
-                    .size(96.dp)
+                    .size(dialSize)
                     .pointerInput(Unit) {
                         fun onPoint(x: Float, y: Float) {
                             val cx = size.width / 2f
@@ -523,16 +923,18 @@ internal fun MainActivity.Knob(
                         detectTapGestures { pos -> setAt(pos.x, pos.y) }
                     },
             ) {
-                val sw = 34f
+                val sw = 30f
                 val inset = sw
-                drawArc(
+                val r = (size.minDimension - 2 * inset) / 2f
+                val cx0 = size.width / 2f
+                val cy0 = size.height / 2f
+                // cuerpo + anillo completo (look de la referencia)
+                drawCircle(Paf.Surf1, radius = r + sw / 2f, center = Offset(cx0, cy0))
+                drawCircle(
                     color = trackColor,
-                    startAngle = 135f,
-                    sweepAngle = 270f,
-                    useCenter = false,
-                    style = Stroke(width = sw, cap = androidx.compose.ui.graphics.StrokeCap.Round),
-                    topLeft = Offset(inset, inset),
-                    size = Size(size.width - 2 * inset, size.height - 2 * inset),
+                    radius = r,
+                    center = Offset(cx0, cy0),
+                    style = Stroke(width = sw),
                 )
                 drawArc(
                     color = fillColor,
@@ -580,10 +982,10 @@ internal fun MainActivity.BandRow(
                         if (!band.enabled) " (off)" else "",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Slider(
+                PafHSlider(
                     value = band.gainDb.coerceIn(-15f, 15f),
-                    onValueChange = onGain,
                     valueRange = -15f..15f,
+                    onValueChange = onGain,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

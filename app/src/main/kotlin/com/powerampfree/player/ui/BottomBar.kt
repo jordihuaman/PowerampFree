@@ -61,7 +61,11 @@ internal enum class PafTab(val desc: String) {
     QUEUE("Queue"),
 }
 
-internal enum class PafIconKind { Grid, Bars, Magnifier, Burger, Play, Pause, QueueList, Gear, Info, Folder, Person, Shuffle, Down, Note }
+internal enum class PafIconKind {
+    Grid, Bars, Magnifier, Burger, Play, Pause, QueueList, Gear, Info, Folder, Person,
+    Shuffle, Down, Note, Repeat, Prev, Next, ThumbUp, ThumbDown, TextLines, Dots, Clock,
+    Tone, Limit, Headphones, Lock, Trash, Plus,
+}
 
 private val NAV_TABS = listOf(PafTab.LIBRARY, PafTab.EQ, PafTab.SEARCH, PafTab.MENU)
 
@@ -218,6 +222,111 @@ internal fun PafIcon(kind: PafIconKind, tint: Color, size: Dp, modifier: Modifie
                 drawCircle(tint, radius = sw * 0.7f, center = Offset(s * 0.5f, s * 0.32f))
                 drawLine(tint, Offset(s * 0.5f, s * 0.48f), Offset(s * 0.5f, s * 0.72f), sw, StrokeCap.Round)
             }
+            PafIconKind.Repeat -> {
+                drawLine(tint, Offset(s * 0.18f, s * 0.34f), Offset(s * 0.78f, s * 0.34f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(s * 0.22f, s * 0.66f), Offset(s * 0.82f, s * 0.66f), sw, StrokeCap.Round)
+                // puntas
+                drawLine(tint, Offset(s * 0.66f, s * 0.20f), Offset(s * 0.82f, s * 0.34f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(s * 0.66f, s * 0.48f), Offset(s * 0.82f, s * 0.34f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(s * 0.34f, s * 0.80f), Offset(s * 0.18f, s * 0.66f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(s * 0.34f, s * 0.52f), Offset(s * 0.18f, s * 0.66f), sw, StrokeCap.Round)
+            }
+            PafIconKind.Prev, PafIconKind.Next -> {
+                val next = kind == PafIconKind.Next
+                val barX = if (next) s * 0.80f else s * 0.20f
+                drawLine(tint, Offset(barX, s * 0.20f), Offset(barX, s * 0.80f), sw * 1.4f, StrokeCap.Round)
+                val p = androidx.compose.ui.graphics.Path().apply {
+                    if (next) {
+                        moveTo(s * 0.20f, s * 0.20f); lineTo(s * 0.68f, s * 0.50f); lineTo(s * 0.20f, s * 0.80f)
+                    } else {
+                        moveTo(s * 0.80f, s * 0.20f); lineTo(s * 0.32f, s * 0.50f); lineTo(s * 0.80f, s * 0.80f)
+                    }
+                    close()
+                }
+                drawPath(p, tint)
+            }
+            PafIconKind.ThumbUp, PafIconKind.ThumbDown -> {
+                val down = kind == PafIconKind.ThumbDown
+                fun y(v: Float) = if (down) s * (1f - v) else s * v
+                val p = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(s * 0.18f, y(0.44f))
+                    lineTo(s * 0.34f, y(0.44f))
+                    lineTo(s * 0.44f, y(0.20f))
+                    lineTo(s * 0.60f, y(0.26f))
+                    lineTo(s * 0.56f, y(0.44f))
+                    lineTo(s * 0.84f, y(0.44f))
+                    lineTo(s * 0.78f, y(0.80f))
+                    lineTo(s * 0.18f, y(0.80f))
+                    close()
+                }
+                drawPath(p, tint, style = Stroke(sw))
+            }
+            PafIconKind.TextLines -> {
+                val ws = listOf(0.72f, 0.52f, 0.62f)
+                ws.forEachIndexed { i, w ->
+                    val yy = s * (0.30f + i * 0.20f)
+                    drawLine(tint, Offset(s * 0.16f, yy), Offset(s * (0.16f + w), yy), sw, StrokeCap.Round)
+                }
+            }
+            PafIconKind.Dots -> {
+                listOf(0.30f, 0.50f, 0.70f).forEach { yy ->
+                    drawCircle(tint, radius = sw * 0.72f, center = Offset(s * 0.5f, s * yy))
+                }
+            }
+            PafIconKind.Clock -> {
+                drawCircle(tint, radius = s * 0.38f, style = Stroke(sw))
+                drawLine(tint, Offset(s * 0.5f, s * 0.28f), Offset(s * 0.5f, s * 0.52f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(s * 0.5f, s * 0.52f), Offset(s * 0.66f, s * 0.62f), sw, StrokeCap.Round)
+            }
+            PafIconKind.Tone -> {
+                drawCircle(tint, radius = s * 0.36f, style = Stroke(sw))
+                drawCircle(tint, radius = s * 0.10f, center = Offset(s * 0.5f, s * 0.5f))
+            }
+            PafIconKind.Limit -> {
+                drawCircle(tint, radius = s * 0.38f, style = Stroke(sw))
+                drawCircle(tint, radius = s * 0.20f, style = Stroke(sw))
+            }
+            PafIconKind.Headphones -> {
+                drawArc(
+                    tint, startAngle = 180f, sweepAngle = 180f, useCenter = false,
+                    topLeft = Offset(s * 0.16f, s * 0.22f),
+                    size = Size(s * 0.68f, s * 0.56f),
+                    style = Stroke(sw, cap = StrokeCap.Round),
+                )
+                drawRoundRect(
+                    tint, topLeft = Offset(s * 0.14f, s * 0.50f),
+                    size = Size(s * 0.16f, s * 0.30f), cornerRadius = CornerRadius(s * 0.07f),
+                )
+                drawRoundRect(
+                    tint, topLeft = Offset(s * 0.70f, s * 0.50f),
+                    size = Size(s * 0.16f, s * 0.30f), cornerRadius = CornerRadius(s * 0.07f),
+                )
+            }
+            PafIconKind.Lock -> {
+                drawArc(
+                    tint, startAngle = 180f, sweepAngle = 180f, useCenter = false,
+                    topLeft = Offset(s * 0.30f, s * 0.16f),
+                    size = Size(s * 0.40f, s * 0.40f),
+                    style = Stroke(sw, cap = StrokeCap.Round),
+                )
+                drawRoundRect(
+                    tint, topLeft = Offset(s * 0.20f, s * 0.42f),
+                    size = Size(s * 0.60f, s * 0.40f), cornerRadius = CornerRadius(s * 0.08f),
+                )
+            }
+            PafIconKind.Trash -> {
+                drawLine(tint, Offset(s * 0.16f, s * 0.28f), Offset(s * 0.84f, s * 0.28f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(s * 0.38f, s * 0.18f), Offset(s * 0.62f, s * 0.18f), sw, StrokeCap.Round)
+                drawRoundRect(
+                    tint, topLeft = Offset(s * 0.24f, s * 0.34f),
+                    size = Size(s * 0.52f, s * 0.48f), cornerRadius = CornerRadius(s * 0.08f),
+                    style = Stroke(sw),
+                )
+            }
+            PafIconKind.Plus -> {
+                drawLine(tint, Offset(s * 0.5f, s * 0.20f), Offset(s * 0.5f, s * 0.80f), sw * 1.2f, StrokeCap.Round)
+                drawLine(tint, Offset(s * 0.20f, s * 0.5f), Offset(s * 0.80f, s * 0.5f), sw * 1.2f, StrokeCap.Round)
+            }
         }
     }
 }
@@ -348,7 +457,7 @@ internal fun MainActivity.PafMiniRow(snap: PlayerSnapshot, onOpen: () -> Unit) {
             )
             if (snap.artist.isNotEmpty()) {
                 Text(
-                    snap.artist,
+                    artistLabel(snap.artist),
                     style = MaterialTheme.typography.labelMedium,
                     color = Paf.Text3,
                     maxLines = 1,

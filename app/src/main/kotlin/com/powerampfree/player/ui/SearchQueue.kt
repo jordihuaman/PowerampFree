@@ -72,6 +72,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -83,6 +84,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.io.File
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -123,31 +125,69 @@ internal fun MainActivity.SearchTab(onOpenCtx: OpenCtx = { _, _, _ -> }) {
         var mode by remember { mutableStateOf(SearchFilter.ALL) }
         var history by remember { mutableStateOf(SearchHistory.load(this)) }
 
-        Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SearchFilter.values().forEach { f ->
-                    OutlinedButton(onClick = { mode = f }) {
-                        Text(
-                            f.label,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (mode == f) MaterialTheme.colorScheme.primary
-                            else LocalContentColor.current,
-                        )
-                    }
-                }
-            }
-            OutlinedTextField(
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Buscar",
+                fontFamily = PafFamilyBold,
+                fontWeight = FontWeight.Bold,
+                fontSize = 30.sp,
+                color = Paf.Text,
+            )
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.material3.OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                placeholder = { Text("Buscar…") },
+                shape = RoundedCornerShape(50),
+                placeholder = { Text("Buscar…", fontFamily = PafFamily, color = Paf.Text3) },
+                leadingIcon = {
+                    Box(modifier = Modifier.padding(start = 6.dp)) {
+                        PafIcon(PafIconKind.Magnifier, Paf.Text3, 18.dp)
+                    }
+                },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 10.dp)
+                                .clickable { query = "" },
+                        ) {
+                            Text(
+                                "×",
+                                fontFamily = PafFamilyBold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp,
+                                color = Paf.Text2,
+                            )
+                        }
+                    }
+                },
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Paf.Surf2,
+                    unfocusedContainerColor = Paf.Surf2,
+                    focusedBorderColor = Paf.Stroke,
+                    unfocusedBorderColor = Color.Transparent,
+                    cursorColor = Paf.Text,
+                    focusedTextColor = Paf.Text,
+                    unfocusedTextColor = Paf.Text,
+                ),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = {
                     SearchHistory.add(this@SearchTab, query)
                     history = SearchHistory.load(this@SearchTab)
                 }),
             )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SearchFilter.values().forEach { f ->
+                    PafActionChip(f.label, active = mode == f) { mode = f }
+                }
+            }
             Spacer(Modifier.height(8.dp))
 
             if (query.isBlank()) {
@@ -156,26 +196,65 @@ internal fun MainActivity.SearchTab(onOpenCtx: OpenCtx = { _, _, _ -> }) {
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("Historial", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Historial",
+                            fontFamily = PafFamilyBold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = Paf.Text2,
+                        )
                         Spacer(Modifier.weight(1f))
-                        androidx.compose.material3.TextButton(onClick = {
+                        PafActionChip("Borrar", icon = PafIconKind.Trash) {
                             SearchHistory.clear(this@SearchTab)
                             history = emptyList()
-                        }) { Text("🗑 Borrar") }
+                        }
                     }
+                    Spacer(Modifier.height(4.dp))
                     history.forEach { h ->
-                        androidx.compose.material3.TextButton(onClick = { query = h }) {
-                            Text("🕘 $h", style = MaterialTheme.typography.bodyMedium)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .clickable { query = h },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            PafIcon(PafIconKind.Clock, Paf.Text3, 17.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                h,
+                                fontFamily = PafFamily,
+                                fontSize = 16.sp,
+                                color = Paf.Text2,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f).clipToBounds(),
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clickable {
+                                        SearchHistory.remove(this@SearchTab, h)
+                                        history = SearchHistory.load(this@SearchTab)
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "×",
+                                    fontFamily = PafFamilyBold,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 18.sp,
+                                    color = Paf.Text3,
+                                )
+                            }
                         }
                     }
                 } else {
                     Text(
                         "Busca por título, artista o álbum.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        fontFamily = PafFamily,
+                        fontSize = 14.sp,
+                        color = Paf.Text3,
                     )
                 }
-                Spacer(Modifier.weight(1f))
                 return@Column
             }
 
@@ -193,32 +272,26 @@ internal fun MainActivity.SearchTab(onOpenCtx: OpenCtx = { _, _, _ -> }) {
             }
             Text(
                 "${results.size} resultados",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
+                fontFamily = PafFamily,
+                fontSize = 13.sp,
+                color = Paf.Text3,
+                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
             )
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            LazyColumn(modifier = Modifier.weight(1f)) {
                 itemsIndexed(results) { i, t ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                onClick = {
-                                    SearchHistory.add(this@SearchTab, q)
-                                    history = SearchHistory.load(this@SearchTab)
-                                    playTracks(results, i)
-                                },
-                                onLongClick = { onOpenCtx(t, results, i) },
-                            )
-                            .padding(vertical = 4.dp),
-                    ) {
-                        Text(t.title, style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "${t.artist} — ${t.album}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
+                    PafTrackRow(
+                        track = t,
+                        tracks = results,
+                        index = i,
+                        onOpenCtx = onOpenCtx,
+                        onRowClick = {
+                            SearchHistory.add(this@SearchTab, q)
+                            history = SearchHistory.load(this@SearchTab)
+                            playTracks(results, i)
+                        },
+                    )
                 }
+                item { Spacer(Modifier.height(16.dp)) }
             }
         }
     }
@@ -226,62 +299,59 @@ internal fun MainActivity.SearchTab(onOpenCtx: OpenCtx = { _, _, _ -> }) {
 
     // ---------------------------------------------------------- queue tab
 
-    @OptIn(ExperimentalFoundationApi::class)
     @Composable
-internal fun MainActivity.QueueTab(snap: PlayerSnapshot, onOpenCtx: OpenCtx = { _, _, _ -> }) {
+internal fun MainActivity.QueueTab(
+        snap: PlayerSnapshot,
+        onOpenCtx: OpenCtx = { _, _, _ -> },
+        onBack: () -> Unit = {},
+    ) {
         // Subscribe to orchestrator publishes (same-process queue channel).
-        val ver = QueueBus.version.value
+        QueueBus.version.value
         val tracks = QueueBus.tracks
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
             item {
-                Text("Cola", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                PafBackPill("↑ Biblioteca", onClick = onBack)
+                Spacer(Modifier.height(8.dp))
                 Text(
-                    "${tracks.size} pistas · toca una para saltar a ella",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    "Cola",
+                    fontFamily = PafFamilyBold,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 30.sp,
+                    color = Paf.Text,
+                )
+                Text(
+                    if (tracks.isEmpty()) "vacía"
+                    else "${tracks.size} pistas · toca una para saltar a ella",
+                    fontFamily = PafFamily,
+                    fontSize = 13.sp,
+                    color = Paf.Text3,
+                    modifier = Modifier.padding(bottom = 6.dp),
                 )
             }
             if (tracks.isEmpty()) {
                 item {
                     Text(
                         "La cola está vacía: reproduce algo desde la Biblioteca.",
-                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = PafFamily,
+                        fontSize = 14.sp,
+                        color = Paf.Text3,
                     )
                 }
             }
             itemsIndexed(tracks) { i, t ->
-                val isCurrent = t.uri == snap.uri && snap.uri.isNotEmpty()
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .let { m ->
-                            if (isCurrent) {
-                                m.background(Color(0x2239A7E4))
-                            } else m
-                        }
-                        .clip(RoundedCornerShape(8.dp))
-                        .combinedClickable(
-                            onClick = { if (!isCurrent) sendSeekQueue(i) },
-                            onLongClick = { onOpenCtx(t, tracks, i) },
-                        )
-                        .padding(vertical = 4.dp, horizontal = 6.dp),
-                ) {
-                    Text(
-                        "${i + 1}. ${t.title}" + if (isCurrent) "  ▶" else "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isCurrent) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        "${t.artist} — ${t.album}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
+                PafTrackRow(
+                    track = t,
+                    tracks = tracks,
+                    index = i,
+                    onOpenCtx = onOpenCtx,
+                    number = i + 1,
+                    onRowClick = {
+                        val isCurrent = t.uri == snap.uri && snap.uri.isNotEmpty()
+                        if (!isCurrent) sendSeekQueue(i)
+                    },
+                )
             }
             item { Spacer(Modifier.height(24.dp)) }
         }

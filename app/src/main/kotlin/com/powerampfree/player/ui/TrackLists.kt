@@ -198,9 +198,9 @@ internal fun MainActivity.TrackContextMenu(
             contentAlignment = Alignment.BottomCenter,
         ) {
             Surface(
-                color = MaterialTheme.colorScheme.surface,
+                color = Paf.Surf2,
                 shape = RoundedCornerShape(
-                    topStart = 18.dp, topEnd = 18.dp, bottomStart = 0.dp, bottomEnd = 0.dp,
+                    topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp,
                 ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -213,73 +213,84 @@ internal fun MainActivity.TrackContextMenu(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 track.title,
-                                style = MaterialTheme.typography.titleMedium,
+                                fontFamily = PafFamilyBold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 19.sp,
+                                color = Paf.Text,
                                 maxLines = 1,
                             )
                             Text(
-                                "${track.artist} — ${track.album}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.outline,
+                                artistLabel(track.artist),
+                                fontFamily = PafFamily,
+                                fontSize = 14.sp,
+                                color = Paf.Text3,
                                 maxLines = 1,
                             )
                             Text(
-                                "${fmtDur(track.durationMs)} · ${extLabel(track.uri)}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline,
+                                run {
+                                    val alb = track.album
+                                        .takeIf { it.isNotBlank() && !it.startsWith("<unknown>") }
+                                    val ext = extLabel(track.uri).takeIf { it != "?" && it.length <= 5 }
+                                    listOfNotNull(fmtDur(track.durationMs), alb ?: ext)
+                                        .joinToString(" · ")
+                                },
+                                fontFamily = PafFamily,
+                                fontSize = 12.sp,
+                                color = Paf.Text3,
                             )
                         }
                         val rated = if (ratTick >= 0) {
                             RatingsStore.rating(this@TrackContextMenu, track.uri)
                         } else 0
-                        androidx.compose.material3.TextButton(onClick = {
+                        PafRatingPill(PafIconKind.ThumbUp, rated == 1) {
                             RatingsStore.toggle(this@TrackContextMenu, track.uri, 1)
                             ratTick++
-                        }) {
-                            Text(
-                                "👍",
-                                color = if (rated == 1) Color(0xFF39A7E4)
-                                else LocalContentColor.current,
-                            )
                         }
-                        androidx.compose.material3.TextButton(onClick = {
+                        Spacer(Modifier.width(6.dp))
+                        PafRatingPill(PafIconKind.ThumbDown, rated == -1) {
                             RatingsStore.toggle(this@TrackContextMenu, track.uri, -1)
                             ratTick++
-                        }) {
-                            Text(
-                                "👎",
-                                color = if (rated == -1) Color(0xFFE4394E)
-                                else LocalContentColor.current,
-                            )
                         }
                     }
                     Spacer(Modifier.height(2.dp))
                     // ---- actions
                     val actions = buildList {
-                        add("▶" to ("Reproducir ahora" to onPlay))
-                        add("⏭" to ("Encolar siguiente" to onEnqueueNext))
-                        add("⤓" to ("Encolar al final de la cola" to onEnqueueEnd))
-                        if (track.artist.isNotBlank()) {
-                            add("🎤" to ("Ir a: ${track.artist}" to onArtist))
+                        add(PafIconKind.Play to ("Reproducir ahora" to onPlay))
+                        add(PafIconKind.Next to ("Encolar siguiente" to onEnqueueNext))
+                        add(PafIconKind.Down to ("Encolar al final de la cola" to onEnqueueEnd))
+                        val artistName = track.artist
+                            .takeIf { it.isNotBlank() && !it.startsWith("<unknown>") }
+                        if (artistName != null) {
+                            add(PafIconKind.Person to ("Ir a: $artistName" to onArtist))
                         }
-                        if (track.album.isNotBlank()) {
-                            add("💿" to ("Ir a: ${track.album}" to onAlbum))
+                        val albumName = track.album
+                            .takeIf { it.isNotBlank() && !it.startsWith("<unknown>") }
+                        if (albumName != null) {
+                            add(PafIconKind.Note to ("Ir a: $albumName" to onAlbum))
                         }
-                        add("📁" to ("Ir a: carpeta" to onFolder))
-                        add("🔖" to ("Añadir a Playlist" to onAddToPlaylist))
-                        add("📝" to ("Letras" to onLyrics))
+                        add(PafIconKind.Folder to ("Ir a: carpeta" to onFolder))
+                        add(PafIconKind.QueueList to ("Añadir a Playlist" to onAddToPlaylist))
+                        add(PafIconKind.TextLines to ("Letras" to onLyrics))
                     }
-                    actions.forEach { (glyph, pair) ->
+                    actions.forEach { (icon, pair) ->
                         val (label, action) = pair
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(50))
                                 .clickable { action() }
-                                .padding(horizontal = 10.dp, vertical = 10.dp),
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(glyph, modifier = Modifier.width(40.dp))
-                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                            PafIcon(icon, Paf.Text2, 18.dp)
+                            Spacer(Modifier.width(18.dp))
+                            Text(
+                                label,
+                                fontFamily = PafFamilyBold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = Paf.Text,
+                            )
                         }
                     }
                 }

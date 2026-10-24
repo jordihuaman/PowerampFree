@@ -32,4 +32,11 @@ object SearchHistory {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().remove(KEY).apply()
     }
+
+    /** Quita una consulta concreta (× por fila del historial). */
+    fun remove(context: Context, query: String) {
+        val next = load(context).filter { it != query }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY, next.joinToString("\u0001")).apply()
+    }
 }

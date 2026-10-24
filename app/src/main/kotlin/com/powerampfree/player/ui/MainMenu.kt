@@ -40,6 +40,8 @@ internal fun MainActivity.MainMenuSheet(
     onSettings: () -> Unit,
     onQueue: () -> Unit,
     onAbout: () -> Unit,
+    onPlayer: () -> Unit,
+    onLibrary: () -> Unit,
 ) {
     BackHandler { onClose() }
     val scrim = remember { MutableInteractionSource() }
@@ -91,9 +93,23 @@ internal fun MainActivity.MainMenuSheet(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 MenuRow(icon = PafIconKind.Gear, label = "Ajustes", onClick = onSettings)
-                MenuRow(icon = PafIconKind.QueueList, label = "Cola de reproducción", onClick = onQueue)
-                MenuRow(icon = PafIconKind.Info, label = "Acerca de", onClick = onAbout)
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                ) {
+                    PafActionChip("Portada", icon = PafIconKind.Note, onClick = onPlayer)
+                    PafActionChip("Biblioteca", icon = PafIconKind.Grid, onClick = onLibrary)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                ) {
+                    PafActionChip("Cola", icon = PafIconKind.QueueList, onClick = onQueue)
+                    PafActionChip("Acerca de", icon = PafIconKind.Info, onClick = onAbout)
+                }
+                Spacer(modifier = Modifier.height(14.dp))
             }
         }
     }

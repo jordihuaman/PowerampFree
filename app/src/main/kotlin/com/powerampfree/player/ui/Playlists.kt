@@ -83,6 +83,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.io.File
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -117,7 +118,7 @@ import com.powerampfree.player.*
      * from any track's long-press context menu ("Añadir a Playlist").
      */
     @Composable
-internal fun MainActivity.PlaylistsScreen(onOpen: (String) -> Unit) {
+internal fun MainActivity.PlaylistsScreen(onOpen: (String) -> Unit, onBack: () -> Unit = {}) {
         var names by remember { mutableStateOf(PlaylistStore.list(this)) }
         var showNew by remember { mutableStateOf(false) }
         var newName by remember { mutableStateOf("") }
@@ -129,20 +130,31 @@ internal fun MainActivity.PlaylistsScreen(onOpen: (String) -> Unit) {
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             item {
+                Spacer(Modifier.height(8.dp))
+                PafBackPill("↑ Biblioteca", onClick = onBack)
+                Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Playlists", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Playlists",
+                            fontFamily = PafFamilyBold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 30.sp,
+                            color = Paf.Text,
+                        )
                         Text(
                             "${names.size} listas guardadas",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
+                            fontFamily = PafFamily,
+                            fontSize = 13.sp,
+                            color = Paf.Text3,
                         )
                     }
-                    OutlinedButton(onClick = { showNew = true }) { Text("＋ Nueva") }
+                    PafActionChip("Nueva", icon = PafIconKind.Plus) { showNew = true }
                 }
+                Spacer(Modifier.height(4.dp))
             }
             if (names.isEmpty()) {
                 item {
@@ -159,19 +171,36 @@ internal fun MainActivity.PlaylistsScreen(onOpen: (String) -> Unit) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .height(64.dp)
                         .clickable { onOpen(name) }
-                        .padding(vertical = 8.dp, horizontal = 10.dp),
+                        .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("🔖", modifier = Modifier.width(30.dp))
-                    Text(name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "$n pistas",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Paf.CatPlaylist, androidx.compose.foundation.shape.CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PafIcon(PafIconKind.QueueList, Paf.Text, 18.dp)
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            name,
+                            fontFamily = PafFamilyBold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp,
+                            color = Paf.Text,
+                            maxLines = 1,
+                        )
+                        Text(
+                            "$n pistas",
+                            fontFamily = PafFamily,
+                            fontSize = 12.sp,
+                            color = Paf.Text3,
+                        )
+                    }
                 }
             }
         }
@@ -219,6 +248,7 @@ internal fun MainActivity.PlaylistScreen(
         name: String,
         onOpenCtx: OpenCtx,
         onChange: (String?) -> Unit,
+        onBack: () -> Unit = {},
     ) {
         var list by remember { mutableStateOf<List<MediaTrack>>(emptyList()) }
         var tick by remember { mutableStateOf(0) }
@@ -234,28 +264,31 @@ internal fun MainActivity.PlaylistScreen(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             item {
+                Spacer(Modifier.height(8.dp))
+                PafBackPill("↑ Playlists", onClick = onBack)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    name,
+                    fontFamily = PafFamilyBold,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 30.sp,
+                    color = Paf.Text,
+                    maxLines = 1,
+                )
+                Text(
+                    "${list.size} pistas",
+                    fontFamily = PafFamily,
+                    fontSize = 13.sp,
+                    color = Paf.Text3,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(bottom = 4.dp),
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(name, style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "${list.size} pistas",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
-                    OutlinedButton(onClick = { playTracks(list, 0) }) { Text("▶ Reproducir") }
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(top = 4.dp),
-                ) {
-                    OutlinedButton(onClick = { newTitle = name; showRename = true }) {
-                        Text("✏ Renombrar")
-                    }
-                    OutlinedButton(onClick = { showDelete = true }) { Text("🗑 Eliminar") }
+                    PafActionChip("Todo", icon = PafIconKind.Play) { playTracks(list, 0) }
+                    PafActionChip("Renombrar") { newTitle = name; showRename = true }
+                    PafActionChip("Eliminar", icon = PafIconKind.Trash) { showDelete = true }
                 }
                 Spacer(Modifier.height(4.dp))
             }
@@ -270,38 +303,27 @@ internal fun MainActivity.PlaylistScreen(
                 }
             }
             itemsIndexed(list) { i, t ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .combinedClickable(
-                            onClick = { playTracks(list, i) },
-                            onLongClick = { onOpenCtx(t, list, i) },
-                        )
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .padding(vertical = 6.dp, horizontal = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(t.title, style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "${t.artist} — ${t.album}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
-                    Text(
-                        "🗑",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier
-                            .clickable {
-                                if (PlaylistStore.removeTrack(this@PlaylistScreen, name, t.uri)) {
-                                    tick++
-                                }
-                            },
-                    )
-                }
+                PafTrackRow(
+                    track = t,
+                    tracks = list,
+                    index = i,
+                    onOpenCtx = onOpenCtx,
+                    trailing = {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(50))
+                                .clickable {
+                                    if (PlaylistStore.removeTrack(this@PlaylistScreen, name, t.uri)) {
+                                        tick++
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            PafIcon(PafIconKind.Trash, Paf.Text3, 17.dp)
+                        }
+                    },
+                )
             }
         }
         if (showRename) {

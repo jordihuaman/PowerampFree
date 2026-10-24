@@ -83,6 +83,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.io.File
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -151,7 +152,7 @@ internal fun MainActivity.SettingsScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     androidx.compose.material3.TextButton(onClick = {
                         if (sub != null) sub = null else onClose()
-                    }) { Text(if (sub == null) "?" else "?") }
+                    }) { Text("\u2190") }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             if (sub == null) "Ajustes" else when (sub) {
@@ -160,7 +161,7 @@ internal fun MainActivity.SettingsScreen(
                                 SettingsSub.AUDIO -> "Audio"
                                 SettingsSub.HEADSET -> "Headset/Bluetooth"
                                 SettingsSub.ART -> "Album Art"
-                                SettingsSub.VIZ -> "Visualización"
+                                SettingsSub.VIZ -> "VisualizaciÃ³n"
                                 else -> "Acerca de"
                             },
                             style = MaterialTheme.typography.titleMedium,
@@ -199,7 +200,7 @@ internal fun MainActivity.SettingsScreen(
     // -------------------------------------------------------- settings root
 
 internal data class SettingsRow(
-        val glyph: String,
+        val icon: PafIconKind,
         val title: String,
         val summary: String,
         val sub: SettingsSub?,
@@ -209,19 +210,19 @@ internal data class SettingsRow(
     @Composable
 internal fun MainActivity.SettingsRoot(onOpen: (SettingsSub) -> Unit) {
         val rows = listOf(
-            SettingsRow("??", "Look and Feel", "Tema, acento, tipografía", SettingsSub.LOOKFEEL),
-            SettingsRow("??", "Audio", "Focus/Replay Gain — bloque 8", SettingsSub.AUDIO),
+            SettingsRow(PafIconKind.Gear, "Look and Feel", "Tema, acento, tipografÃ­a", SettingsSub.LOOKFEEL),
+            SettingsRow(PafIconKind.Bars, "Audio", "Focus/Replay Gain Â· bloque 8", SettingsSub.AUDIO),
             SettingsRow(
-                "??", "Visualización",
-                "Espectro player/EQ, estilo, opacidad — bloque 14", SettingsSub.VIZ,
+                PafIconKind.Bars, "VisualizaciÃ³n",
+                "Espectro player/EQ, estilo, opacidad Â· bloque 14", SettingsSub.VIZ,
             ),
-            SettingsRow("??", "Background", "Fondo — en Album Art (bl. 13)", null),
-            SettingsRow("??", "Album Art", "Carátulas + fondo — bloque 12/13", SettingsSub.ART),
-            SettingsRow("??", "Biblioteca", "Rescan, progreso, stats, filtros", SettingsSub.LIBRARY),
-            SettingsRow("??", "Headset/Bluetooth", "Botones y conexión — bloque 10", SettingsSub.HEADSET),
-            SettingsRow("??", "Lock Screen", "Opciones de lockscreen", null),
-            SettingsRow("?", "Misc", "Scrobbling/Android Auto", null),
-            SettingsRow("?", "About", "Versión y datos", SettingsSub.ABOUT),
+            SettingsRow(PafIconKind.Note, "Background", "Fondo Â· en Album Art (bl. 13)", null),
+            SettingsRow(PafIconKind.Note, "Album Art", "CarÃ¡tulas + fondo Â· bloque 12/13", SettingsSub.ART),
+            SettingsRow(PafIconKind.QueueList, "Biblioteca", "Rescan, progreso, stats, filtros", SettingsSub.LIBRARY),
+            SettingsRow(PafIconKind.Headphones, "Headset/Bluetooth", "Botones y conexiÃ³n Â· bloque 10", SettingsSub.HEADSET),
+            SettingsRow(PafIconKind.Lock, "Lock Screen", "Opciones de lockscreen", null),
+            SettingsRow(PafIconKind.Info, "Misc", "Scrobbling/Android Auto", null),
+            SettingsRow(PafIconKind.Info, "About", "VersiÃ³n y datos", SettingsSub.ABOUT),
         )
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -230,23 +231,39 @@ internal fun MainActivity.SettingsRoot(onOpen: (SettingsSub) -> Unit) {
         ) {
             itemsIndexed(rows) { _, r ->
                 val enabled = r.sub != null
-                Column(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .alpha(if (enabled) 1f else 0.45f)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(50))
                         .clickable(enabled = enabled) { r.sub?.let(onOpen) }
-                        .padding(vertical = 10.dp, horizontal = 6.dp),
+                        .padding(vertical = 8.dp, horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        "${r.glyph}  ${r.title}",
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Text(
-                        r.summary,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Paf.Surf3, androidx.compose.foundation.shape.CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PafIcon(r.icon, Paf.Text2, 18.dp)
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    Column {
+                        Text(
+                            r.title,
+                            fontFamily = PafFamilyBold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp,
+                            color = Paf.Text,
+                        )
+                        Text(
+                            r.summary,
+                            fontFamily = PafFamily,
+                            fontSize = 12.sp,
+                            color = Paf.Text3,
+                        )
+                    }
                 }
             }
             item {
@@ -255,25 +272,25 @@ internal fun MainActivity.SettingsRoot(onOpen: (SettingsSub) -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = {
                         val msg = runCatching { exportData() }
-                            .getOrElse { "Export falló: ${it.message}" }
+                            .getOrElse { "Export fallÃ³: ${it.message}" }
                         RootNote.note = msg
-                    }) { Text("? Export") }
+                    }) { Text("Export") }
                     val importPicker = rememberLauncherForActivityResult(
                         ActivityResultContracts.OpenDocument(),
                     ) { uri ->
                         if (uri != null) {
                             RootNote.note = runCatching { importData(uri) }
-                                .getOrElse { "Import falló: ${it.message}" }
+                                .getOrElse { "Import fallÃ³: ${it.message}" }
                         }
                     }
                     OutlinedButton(onClick = {
                         importPicker.launch(arrayOf("application/json", "text/*", "*/*"))
-                    }) { Text("? Import") }
+                    }) { Text("Import") }
                 }
                 OutlinedButton(onClick = {
                     RootNote.note = runCatching { importLatestBackup() }
-                        .getOrElse { "Import falló: ${it.message}" }
-                }) { Text("? Último backup") }
+                        .getOrElse { "Import fallÃ³: ${it.message}" }
+                }) { Text("Ãšltimo backup") }
                 Text(
                     RootNote.note,
                     style = MaterialTheme.typography.labelSmall,
@@ -347,7 +364,7 @@ internal fun MainActivity.exportData(): String {
             val uri = contentResolver.insert(
                 MediaStore.Files.getContentUri("external"),
                 cv,
-            ) ?: return "Export: no se creó el archivo"
+            ) ?: return "Export: no se creÃ³ el archivo"
             contentResolver.openOutputStream(uri)?.use { os ->
                 os.write(root.toString(2).toByteArray(Charsets.UTF_8))
             } ?: return "Export: no se pudo abrir el stream"
@@ -363,7 +380,7 @@ internal fun MainActivity.exportData(): String {
 
     /** Newest export in Documents/PowerampFree via MediaStore (no SAF UI). */
 internal fun MainActivity.importLatestBackup(): String {
-        if (Build.VERSION.SDK_INT < 29) return "Import último: requiere Android 10+"
+        if (Build.VERSION.SDK_INT < 29) return "Import Ãšltimo: requiere Android 10+"
         val sel =
             "${MediaStore.MediaColumns.RELATIVE_PATH} = ? AND " +
             "${MediaStore.MediaColumns.MIME_TYPE} = ?"
@@ -381,7 +398,7 @@ internal fun MainActivity.importLatestBackup(): String {
                 return importData(uri)
             }
         }
-        return "Import último: no hay backups en Documents/PowerampFree"
+        return "Import Ãšltimo: no hay backups en Documents/PowerampFree"
     }
 
 
@@ -392,7 +409,7 @@ internal fun MainActivity.importData(uri: Uri): String {
         } ?: return "Import: no se pudo leer el archivo"
         val root = org.json.JSONObject(text)
         val prefsObj = root.optJSONObject("prefs")
-            ?: return "Import: JSON sin sección prefs"
+            ?: return "Import: JSON sin secciÃ³n prefs"
         for (name in prefsObj.keys()) {
             val sp = getSharedPreferences(name, Context.MODE_PRIVATE)
             val values = prefsObj.getJSONObject(name)
@@ -453,10 +470,10 @@ internal fun MainActivity.importData(uri: Uri): String {
         }
         // Apply the restored EQ immediately (session may be connected).
         runCatching { sendPreset(PresetStore.loadCurrent(this)) }
-        // audio_settings (replay gain) was restored above — re-apply the trim.
+        // audio_settings (replay gain) was restored above Â· re-apply the trim.
         runCatching { sendReplayGain() }
-        return "Import OK (${BACKUP_PREFS.size} prefs · " +
-            "${root.optJSONArray("presets")?.length() ?: 0} presets · " +
-            "${root.optJSONArray("playlists")?.length() ?: 0} playlists · " +
+        return "Import OK (${BACKUP_PREFS.size} prefs Â· " +
+            "${root.optJSONArray("presets")?.length() ?: 0} presets Â· " +
+            "${root.optJSONArray("playlists")?.length() ?: 0} playlists Â· " +
             "${root.optJSONObject("trackState")?.length() ?: 0} pistas estado)"
     }

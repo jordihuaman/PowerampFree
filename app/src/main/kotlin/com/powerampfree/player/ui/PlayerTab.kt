@@ -19,6 +19,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -44,6 +45,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -72,17 +74,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.io.File
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -112,11 +120,45 @@ import com.powerampfree.player.*
     // ------------------------------ album art + background
 
     /**
+     * Placeholder de carátula propio: tile oscuro con una silueta de waveform
+     * centrada. Se dibuja con Canvas (sin recursos gráficos de terceros) y
+     * escala a cualquier tamaño (fila, mini-player, portada grande).
+     */
+    @Composable
+internal fun PafArtPlaceholder(modifier: Modifier = Modifier) {
+        Canvas(modifier = modifier.background(Paf.Surf2)) {
+            val n = 15
+            val left = size.width * 0.18f
+            val right = size.width * 0.82f
+            val gap = (right - left) / n
+            val cy = size.height / 2f
+            val maxH = size.height * 0.46f
+            for (i in 0 until n) {
+                val k = kotlin.math.abs(kotlin.math.sin(i * 1.15 + 0.4)).toFloat()
+                val h = maxH * (0.22f + 0.78f * k)
+                val w = gap * 0.42f
+                drawRoundRect(
+                    color = Paf.Surf4,
+                    topLeft = Offset(left + i * gap + (gap - w) / 2f, cy - h / 2f),
+                    size = Size(w, h),
+                    cornerRadius = CornerRadius(w / 2f),
+                )
+            }
+        }
+    }
+
+
+    /**
      * Art tile resolved from [PlayerSnapshot] cues (MediaStore albumart
      * provider → sibling cover files); generic glyph when nothing found.
      */
     @Composable
-internal fun MainActivity.AlbumArtImage(snap: PlayerSnapshot, px: Int, modifier: Modifier) {
+internal fun MainActivity.AlbumArtImage(
+        snap: PlayerSnapshot,
+        px: Int,
+        modifier: Modifier,
+        crop: Boolean = false,
+    ) {
         var bmp by remember(snap.albumId, snap.uri) {
             mutableStateOf<android.graphics.Bitmap?>(null)
         }
@@ -139,15 +181,17 @@ internal fun MainActivity.AlbumArtImage(snap: PlayerSnapshot, px: Int, modifier:
                 androidx.compose.foundation.Image(
                     bitmap = b.asImageBitmap(),
                     contentDescription = "Carátula",
-                    contentScale = if (ArtSettings.keepAspect(this@AlbumArtImage)) {
-                        ContentScale.Fit
-                    } else {
+                    contentScale = if (crop || !ArtSettings.keepAspect(this@AlbumArtImage)) {
                         ContentScale.Crop
+                    } else {
+                        ContentScale.Fit
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                PafIcon(PafIconKind.Note, Paf.Text3, 28.dp)
+                // Placeholder propio: tile oscuro con silueta de waveform, sin
+                // recursos de la app de referencia (clean-room).
+                PafArtPlaceholder(Modifier.fillMaxSize())
             }
         }
     }
@@ -207,11 +251,193 @@ internal fun MainActivity.PlayerBackground(snap: PlayerSnapshot, modifier: Modif
 
 
     // -------------------------------------------------------- player tab
+    //
+    // Restyle §3: arte cuadrado con like/dislike y letras/menú superpuestos,
+    // título y artista en pastillas con marquee, chips de modo, waveform con
+    // transporte integrado y chip técnico. Todo dibujado con Canvas.
 
-    // (MiniPlayerBar retirado: sustituido por PafMiniRow/PafSeekBand en
-    // ui/BottomBar.kt, estilo pastilla de la referencia.)
+    /** Chip redondo de icono (68×36) con borde #3F3F3F (§3, chips de modo). */
+    @Composable
+internal fun PafIconChip(kind: PafIconKind, active: Boolean, onClick: () -> Unit) {
+        Box(
+            modifier = Modifier
+                .width(68.dp)
+                .height(36.dp)
+                .clip(RoundedCornerShape(50))
+                .border(1.dp, Paf.Stroke, RoundedCornerShape(50))
+                .background(if (active) Paf.Surf2 else Color.Transparent)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            PafIcon(kind, if (active) Paf.Text else Paf.Text3, 18.dp)
+        }
+    }
 
-    @OptIn(ExperimentalFoundationApi::class)
+    /** Botón circular de icono (like/dislike, letras, menú, transporte). */
+    @Composable
+internal fun PafRoundButton(
+        kind: PafIconKind,
+        onClick: () -> Unit,
+        size: Dp = 40.dp,
+        iconSize: Dp = 18.dp,
+        tint: Color = Paf.Text,
+        background: Color = Paf.Surf2,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(background)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            PafIcon(kind, tint, iconSize)
+        }
+    }
+
+    /** ±10 s: arco con flecha (dibujado) y "10" dentro. */
+    @Composable
+internal fun PafNudgeButton(forward: Boolean, onClick: () -> Unit) {
+        Box(
+            modifier = Modifier.size(48.dp).clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(Modifier.size(42.dp)) {
+                val s = this.size.minDimension
+                val sw = s * 0.07f
+                val r = s * 0.33f
+                val cx = s / 2f
+                val cy = s * 0.44f
+                scale(if (forward) -1f else 1f, 1f, Offset(cx, cy)) {
+                    drawArc(
+                        Paf.Text,
+                        startAngle = 115f,
+                        sweepAngle = 245f,
+                        useCenter = false,
+                        topLeft = Offset(cx - r, cy - r),
+                        size = Size(r * 2, r * 2),
+                        style = Stroke(sw, cap = StrokeCap.Round),
+                    )
+                    val ax = cx + r * cos(Math.toRadians(115.0)).toFloat()
+                    val ay = cy + r * sin(Math.toRadians(115.0)).toFloat()
+                    val head = Path().apply {
+                        moveTo(ax - s * 0.02f, ay - s * 0.11f)
+                        lineTo(ax + s * 0.09f, ay + s * 0.01f)
+                        lineTo(ax - s * 0.06f, ay + s * 0.05f)
+                        close()
+                    }
+                    drawPath(head, Paf.Text)
+                }
+            }
+            Text(
+                "10",
+                fontFamily = PafFamilyBold,
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.sp,
+                color = Paf.Text,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp),
+            )
+        }
+    }
+
+    /** Pastilla de rating (like / dislike, §3). */
+    @Composable
+internal fun PafRatingPill(kind: PafIconKind, active: Boolean, onClick: () -> Unit) {
+        Box(
+            modifier = Modifier
+                .width(54.dp)
+                .height(36.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Paf.Surf2)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            PafIcon(kind, if (active) Paf.Text else Paf.Text3, 18.dp)
+        }
+    }
+
+    /**
+     * Waveform/seekbar protagonista (§3): barras espejadas, mitad reproducida
+     * en blanco y mitad restante en gris; tocar busca. El transporte se pinta
+     * encima con fondos negros para que los iconos respiren.
+     */
+    @Composable
+internal fun MainActivity.PafWaveform(
+        isPlaying: Boolean,
+        posMs: Long,
+        durMs: Long,
+        onSeek: (Long) -> Unit,
+        controls: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+    ) {
+        var spectrum by remember { mutableStateOf(FloatArray(0)) }
+        androidx.compose.runtime.LaunchedEffect(isPlaying) {
+            while (currentCoroutineContext().isActive) {
+                spectrum = if (isPlaying) VisualizerTap.spectrum() else FloatArray(0)
+                delay(80)
+            }
+        }
+        val frac = if (durMs > 0) (posMs.toFloat() / durMs).coerceIn(0f, 1f) else 0f
+        Box(modifier = Modifier.fillMaxWidth().height(170.dp)) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(durMs) {
+                        detectTapGestures { off ->
+                            if (durMs > 0) {
+                                onSeek((off.x / size.width * durMs).toLong())
+                            }
+                        }
+                    },
+            ) {
+                val n = 56
+                val left = size.width * 0.14f
+                val right = size.width * 0.86f
+                val gap = (right - left) / n
+                val cy = size.height / 2f
+                val maxH = size.height * 0.88f
+                for (i in 0 until n) {
+                    val base = 0.22f + 0.62f * kotlin.math.abs(
+                        sin(i * 1.71 + 0.35).toFloat(),
+                    )
+                    val live = if (spectrum.isEmpty()) 0f else {
+                        val k = (i * spectrum.size / n).coerceIn(0, spectrum.size - 1)
+                        spectrum[k].coerceIn(0f, 1f)
+                    }
+                    val level = (base * (0.6f + 0.7f * live)).coerceIn(0.08f, 1f)
+                    val h = maxH * level
+                    val played = (i + 0.5f) / n <= frac
+                    drawRoundRect(
+                        color = if (played) Paf.Text else Color(0xFF4A4A4A),
+                        topLeft = Offset(left + i * gap + gap * 0.22f, cy - h / 2f),
+                        size = Size(gap * 0.56f, h),
+                        cornerRadius = CornerRadius(gap * 0.28f),
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                content = controls,
+            )
+        }
+    }
+
+    /** Etiqueta condensada de tiempo: `0:08` / `2:00:19` (§3). */
+    @Composable
+internal fun MainActivity.PafTimeText(ms: Long, modifier: Modifier = Modifier, alignEnd: Boolean = false) {
+        Text(
+            if (ms <= 0L) "0:00" else fmtDur(ms),
+            fontFamily = PafFamilyBold,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = Paf.Text2,
+            modifier = modifier,
+            textAlign = if (alignEnd) androidx.compose.ui.text.style.TextAlign.End
+            else androidx.compose.ui.text.style.TextAlign.Start,
+        )
+    }
+
     @Composable
 internal fun MainActivity.PlayerTab(snap: PlayerSnapshot, onSettings: () -> Unit, onLyrics: () -> Unit) {
         val isPlaying = snap.isPlaying
@@ -224,6 +450,18 @@ internal fun MainActivity.PlayerTab(snap: PlayerSnapshot, onSettings: () -> Unit
         var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
         var showSleep by remember { mutableStateOf(false) }
         var vizOn by remember { mutableStateOf(VizSettings.playerSpectrum(this)) }
+        var posMs by remember { mutableStateOf(0L) }
+        var durMs by remember { mutableStateOf(0L) }
+
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            while (currentCoroutineContext().isActive) {
+                controller?.let { c ->
+                    posMs = c.currentPosition.coerceAtLeast(0L)
+                    durMs = c.duration.coerceAtLeast(0L)
+                }
+                delay(250)
+            }
+        }
 
         // sleep timer countdown → auto pause
         androidx.compose.runtime.LaunchedEffect(sleepEndMs) {
@@ -238,109 +476,163 @@ internal fun MainActivity.PlayerTab(snap: PlayerSnapshot, onSettings: () -> Unit
             }
         }
 
-        Box(modifier = Modifier.fillMaxSize()) {
-            PlayerBackground(snap, Modifier)
-            Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
+        val rated = if (ratTick >= 0) RatingsStore.rating(this, snap.uri) else 0
+
+        Box(modifier = Modifier.fillMaxSize().background(Paf.Bg)) {
+            Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+                Spacer(Modifier.height(8.dp))
+                // ---- arte + acciones superpuestas -------------------------
+                Box(modifier = Modifier.fillMaxWidth().height(308.dp)) {
+                    AlbumArtImage(snap = snap, px = 1024, modifier = Modifier.fillMaxSize(), crop = true)
+                    Row(
+                        modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        PafRatingPill(PafIconKind.ThumbUp, rated == 1) {
+                            RatingsStore.toggle(this@PlayerTab, snap.uri, 1)
+                            ratTick++
+                        }
+                        PafRatingPill(PafIconKind.ThumbDown, rated == -1) {
+                            RatingsStore.toggle(this@PlayerTab, snap.uri, -1)
+                            ratTick++
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        PafRoundButton(PafIconKind.TextLines, onClick = onLyrics)
+                        PafRoundButton(PafIconKind.Dots, onClick = onSettings)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+
+                // ---- título / artista en pastillas ------------------------
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(50))
+                        .background(Paf.Surf1)
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                ) {
                     Text(
                         snap.title,
-                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = PafFamilyBold,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                        color = Paf.Text,
                         maxLines = 1,
-                        modifier = Modifier.basicMarquee(),
+                        modifier = Modifier.clipToBounds().basicMarquee(),
                     )
-                    if (snap.format.isNotEmpty()) {
+                }
+                Spacer(Modifier.height(4.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Paf.Surf1)
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        artistLabel(snap.artist),
+                        fontFamily = PafFamily,
+                        fontSize = 14.sp,
+                        color = Paf.Text3,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+
+                // ---- chips de modo ---------------------------------------
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PafIconChip(PafIconKind.Bars, vizOn) {
+                            vizOn = !vizOn
+                            VizSettings.setPlayerSpectrum(this@PlayerTab, vizOn)
+                        }
+                        PafIconChip(PafIconKind.Clock, sleepEndMs > 0L) { showSleep = true }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PafIconChip(
+                            PafIconKind.Repeat,
+                            repeatS != PlaybackSettings.REPEAT_OFF,
+                        ) {
+                            repeatS = when (repeatS) {
+                                PlaybackSettings.REPEAT_OFF -> PlaybackSettings.REPEAT_ALL
+                                PlaybackSettings.REPEAT_ALL -> PlaybackSettings.REPEAT_ONE
+                                else -> PlaybackSettings.REPEAT_OFF
+                            }
+                            sendRepeat(repeatS)
+                        }
+                        PafIconChip(PafIconKind.Shuffle, shuffleS) {
+                            shuffleS = !shuffleS
+                            sendShuffle(shuffleS)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+
+                // Aire flexible: el transporte baja hacia la zona baja como en
+                // la referencia, dejando un margen corto bajo el chip técnico.
+                Spacer(Modifier.weight(1.1f))
+
+                // ---- waveform + transporte -------------------------------
+                PafWaveform(
+                    isPlaying = isPlaying && vizOn,
+                    posMs = posMs,
+                    durMs = durMs,
+                    onSeek = { controller?.seekTo(it) },
+                ) {
+                    PafNudgeButton(forward = false) { nudgePosition(-10_000L) }
+                    PafRoundButton(
+                        PafIconKind.Prev,
+                        onClick = { sendSkip(false) },
+                        size = 48.dp,
+                        iconSize = 22.dp,
+                        background = Paf.Bg.copy(alpha = 0.86f),
+                    )
+                    PafRoundButton(
+                        if (isPlaying) PafIconKind.Pause else PafIconKind.Play,
+                        onClick = { togglePlayPause() },
+                        size = 76.dp,
+                        iconSize = 34.dp,
+                        background = Paf.Bg.copy(alpha = 0.92f),
+                    )
+                    PafRoundButton(
+                        PafIconKind.Next,
+                        onClick = { sendSkip(true) },
+                        size = 48.dp,
+                        iconSize = 22.dp,
+                        background = Paf.Bg.copy(alpha = 0.86f),
+                    )
+                    PafNudgeButton(forward = true) { nudgePosition(10_000L) }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    PafTimeText(posMs, Modifier.weight(1f))
+                    PafTimeText(durMs, Modifier.weight(1f), alignEnd = true)
+                }
+                Spacer(Modifier.height(6.dp))
+                if (snap.format.isNotEmpty()) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                         Text(
-                            snap.format,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
+                            snap.format.uppercase(),
+                            fontFamily = PafFamilyBold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = Paf.Text3,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(Paf.Surf1)
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
                         )
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    androidx.compose.material3.TextButton(onClick = onSettings) { Text("⚙") }
-                    androidx.compose.material3.TextButton(onClick = onLyrics) { Text("📝") }
-                    // Block 14: bars button toggles the on-player visualization.
-                    androidx.compose.material3.TextButton(onClick = {
-                        val on = !vizOn
-                        vizOn = on
-                        VizSettings.setPlayerSpectrum(this@PlayerTab, on)
-                    }) {
-                        Text(
-                            "📊",
-                            color = if (vizOn) Color(0xFF39A7E4) else LocalContentColor.current,
-                        )
-                    }
-                    androidx.compose.material3.TextButton(onClick = { sendSkip(false) }) { Text("⏮") }
-                    Button(onClick = { togglePlayPause() }) { Text(if (isPlaying) "⏸" else "▶") }
-                    androidx.compose.material3.TextButton(onClick = { sendSkip(true) }) { Text("⏭") }
-                }
-            }
-            // art tile row: own row, no nested weight chains
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 6.dp),
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                AlbumArtImage(snap = snap, px = 512, modifier = Modifier.size(160.dp))
-            }
-            // ---- controls row: shuffle / repeat / sleep / ±10 s / rating
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val accent = Color(0xFF39A7E4)
-                androidx.compose.material3.TextButton(onClick = {
-                    shuffleS = !shuffleS
-                    sendShuffle(shuffleS)
-                }) {
-                    Text(
-                        "🔀", color = if (shuffleS) accent else LocalContentColor.current,
-                    )
-                }
-                androidx.compose.material3.TextButton(onClick = {
-                    repeatS = when (repeatS) {
-                        PlaybackSettings.REPEAT_OFF -> PlaybackSettings.REPEAT_ALL
-                        PlaybackSettings.REPEAT_ALL -> PlaybackSettings.REPEAT_ONE
-                        else -> PlaybackSettings.REPEAT_OFF
-                    }
-                    sendRepeat(repeatS)
-                }) {
-                    val label = when (repeatS) {
-                        PlaybackSettings.REPEAT_ONE -> "🔁1"
-                        PlaybackSettings.REPEAT_ALL -> "🔁∞"
-                        else -> "🔁"
-                    }
-                    Text(label, color = if (repeatS != PlaybackSettings.REPEAT_OFF) accent else LocalContentColor.current)
-                }
-                androidx.compose.material3.TextButton(onClick = { showSleep = true }) {
-                    Text(
-                        if (sleepEndMs > 0L) "⏰${fmtClock(sleepEndMs - nowTick)}" else "⏰",
-                        color = if (sleepEndMs > 0L) accent else LocalContentColor.current,
-                    )
-                }
-                androidx.compose.material3.TextButton(onClick = { nudgePosition(-10_000L) }) { Text("−10s") }
-                androidx.compose.material3.TextButton(onClick = { nudgePosition(10_000L) }) { Text("+10s") }
-                val rated = if (ratTick >= 0) RatingsStore.rating(this@PlayerTab, snap.uri) else 0
-                androidx.compose.material3.TextButton(onClick = {
-                    RatingsStore.toggle(this@PlayerTab, snap.uri, 1)
-                    ratTick++
-                }) {
-                    Text("👍", color = if (rated == 1) accent else LocalContentColor.current)
-                }
-                androidx.compose.material3.TextButton(onClick = {
-                    RatingsStore.toggle(this@PlayerTab, snap.uri, -1)
-                    ratTick++
-                }) {
-                    Text("👎", color = if (rated == -1) Color(0xFFE4394E) else LocalContentColor.current)
-                }
-            }
-            if (vizOn) SpectrumBars(isPlaying = isPlaying)
+                Spacer(Modifier.weight(0.45f))
             }
         }
 

@@ -126,7 +126,7 @@ internal enum class LibTop { ROOT, SONGS, ALBUMS, ARTISTS, GENRES, FOLDERS, PLAY
 
     /** Sort options for the folder explorer (List Options). */
 internal enum class ListSort(val label: String) {
-        TITLE("T�tulo"), TRACK("N� pista"), DURATION("Duraci�n"),
+        TITLE("Título"), TRACK("Nº pista"), DURATION("Duración"),
     }
 
 
@@ -222,7 +222,7 @@ internal fun MainActivity.LibraryTab(
             )
             top == LibTop.SONGS -> TrackListView("Todas las canciones", libraryOrEmpty, onOpenCtx, onUp = { top = LibTop.ROOT })
             top == LibTop.ALBUMS -> GroupListView(
-                "�lbumes",
+                "Álbumes",
                 albumRows(),
                 onOpen = { detail = it },
             )
@@ -234,14 +234,18 @@ internal fun MainActivity.LibraryTab(
             top == LibTop.FOLDERS -> GroupListView(
                 "Carpetas",
                 folderRows(),
-                onOpen = { g -> folderPath = if (g.subtitle == "(ra�z)") "" else g.subtitle },
+                onOpen = { g -> folderPath = if (g.subtitle == "(raíz)") "" else g.subtitle },
             )
             plName != null -> PlaylistScreen(
                 name = plName!!,
                 onOpenCtx = onOpenCtx,
                 onChange = { plName = it },
+                onBack = { plName = null },
             )
-            top == LibTop.PLAYLISTS -> PlaylistsScreen(onOpen = { plName = it })
+            top == LibTop.PLAYLISTS -> PlaylistsScreen(
+                onOpen = { plName = it },
+                onBack = { top = LibTop.ROOT },
+            )
             top == LibTop.GENRES -> GenresScreen(onOpen = { detail = it })
             else -> LibraryRoot(onOpen = { top = it }, onSettings = onSettings, onQueue = onQueue)
         }
@@ -253,8 +257,8 @@ internal fun MainActivity.albumRows(): List<GroupRow> =
             .values
             .map { list ->
                 GroupRow(
-                    list.first().album.ifBlank { "Sin �lbum" },
-                    list.first().artist.ifBlank { "" } + " � ${list.size} pistas",
+                    list.first().album.ifBlank { "Sin álbum" },
+                    list.first().artist.ifBlank { "" } + " · ${list.size} pistas",
                     list.sortedBy { it.trackNo },
                 )
             }
@@ -270,8 +274,8 @@ internal fun MainActivity.artistRows(): List<GroupRow> =
 internal fun MainActivity.folderRows(): List<GroupRow> =
         libraryOrEmpty.groupBy { it.folder }
             .map { (f, list) ->
-                val display = f.trimEnd('/').substringAfterLast('/').ifBlank { "Ra�z" }
-                GroupRow(display, f.ifBlank { "(ra�z)" }, list)
+                val display = f.trimEnd('/').substringAfterLast('/').ifBlank { "Raíz" }
+                GroupRow(display, f.ifBlank { "(raíz)" }, list)
             }
             .sortedBy { it.title.lowercase() }
 
@@ -493,23 +497,23 @@ internal fun MainActivity.GenresScreen(onOpen: (GroupRow) -> Unit) {
                 modifier = Modifier.fillMaxSize().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("G�neros", style = MaterialTheme.typography.titleMedium)
-                Text("Cargando�", style = MaterialTheme.typography.bodySmall)
+                Text("Géneros", style = MaterialTheme.typography.titleMedium)
+                Text("Cargando…", style = MaterialTheme.typography.bodySmall)
             }
         } else if (current.isEmpty()) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("G�neros", style = MaterialTheme.typography.titleMedium)
+                Text("Géneros", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "No hay g�neros en la biblioteca del sistema.",
+                    "No hay géneros en la biblioteca del sistema.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
             }
         } else {
-            GroupListView("G�neros", current, onOpen)
+            GroupListView("Géneros", current, onOpen)
         }
     }
 

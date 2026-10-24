@@ -246,21 +246,21 @@ completa.
 
 | # | Brecha | Estado actual del proyecto | Prioridad |
 |---|---|---|---|
-| 1 | Nav de **4 tabs** con iconos vectoriales (no 5 con emoji) | 5 tabs con emoji | P0 |
-| 2 | Mini-player con **miniatura + seekbar + botón** integrado | sin barra de progreso ni miniatura | P0 |
-| 3 | Paleta exacta `#000/#0E0E0E/#181818/#222` y pastillas radio 50 % | sin tokens cerrados | P0 |
-| 4 | Tipografía condensada bold (títulos 32–34 sp, filas 20 sp) | tipografía por defecto | P0 |
-| 5 | Cabecera de lista con breadcrumb + icono de sección + acciones | cabecera simple | P0 |
-| 6 | Filas de 96 dp con miniatura 80 dp y 3 líneas | filas más densas | P0 |
-| 7 | Placeholder de onda para carátula ausente | placeholder distinto | P1 |
-| 8 | Waveform/seeker protagonista (518 px de alto) | seekbar fino | P1 |
-| 9 | Scroller A-Z lateral | ausente | P1 |
-| 10 | Resaltado de pista actual en pastilla | ausente | P1 |
-| 11 | Hoja de menú principal con logo/chips | menú distinto | P1 |
-| 12 | EQ de 10 bandas con verde neón y mandos Tone | EQ básico | P1 |
-| 13 | Chips de búsqueda con estado activo invertido | sin chips | P2 |
-| 14 | Botón Lyrics + vista de letras centrada y grande | pendiente | P2 |
-| 15 | Visualizador a pantalla completa | pendiente | P2 |
+| 1 | Nav de **4 tabs** con iconos vectoriales (no 5 con emoji) | hecho (Sprint 11) | P0 |
+| 2 | Mini-player con **miniatura + seekbar + botón** integrado | hecho (Sprint 11) | P0 |
+| 3 | Paleta exacta `#000/#0E0E0E/#181818/#222` y pastillas radio 50 % | hecho (tokens en `PafTheme.kt`) | P0 |
+| 4 | Tipografía condensada bold (títulos 32–34 sp, filas 20 sp) | hecho (`PafFamilyBold`) | P0 |
+| 5 | Cabecera de lista con breadcrumb + icono de sección + acciones | hecho (`PafBackPill`/`PafActionChip`) | P0 |
+| 6 | Filas de 96 dp con miniatura 80 dp y 3 líneas | hecho (`PafTrackRow`) | P0 |
+| 7 | Placeholder de onda para carátula ausente | hecho (waveform Canvas original) | P1 |
+| 8 | Waveform/seeker protagonista (518 px de alto) | hecho (Sprint 12) | P1 |
+| 9 | Scroller A-Z lateral | pendiente | P1 |
+| 10 | Resaltado de pista actual en pastilla | hecho (`Surf2` + `QueueBus`) | P1 |
+| 11 | Hoja de menú principal con logo/chips | hecho (Sprint 12) | P1 |
+| 12 | EQ de 10 bandas con verde neón y mandos Tone | hecho (Sprint 12) | P1 |
+| 13 | Chips de búsqueda con estado activo invertido | hecho (Sprint 12) | P2 |
+| 14 | Botón Lyrics + vista de letras centrada y grande | hecho (Sprint 6) | P2 |
+| 15 | Visualizador a pantalla completa | pendiente (solo spectrum embebido) | P2 |
 
 ---
 
